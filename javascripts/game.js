@@ -1,49 +1,52 @@
 Crafty.init(600, 300);
-Crafty.background('rgb(127,127,127)');
+Crafty.background('rgb(30,120,150)');
 
 //Paddles
-Crafty.e("Paddle, 2D, DOM, Color, Multiway")
-  .color('rgb(255,0,0)')
+Crafty.e('Paddle, 2D, DOM, Color, Multiway')
+  .color('rgb(205, 200, 177)')
   .attr({ x: 20, y: 100, w: 10, h: 100 })
   .multiway(4, { W: -90, S: 90 });
-Crafty.e("Paddle, 2D, DOM, Color, Multiway")
-  .color('rgb(0,255,0)')
+Crafty.e('Paddle, 2D, DOM, Color, Multiway')
+  .color('rgb(205, 155, 155)')
   .attr({ x: 580, y: 100, w: 10, h: 100 })
   .multiway(4, { UP_ARROW: -90, DOWN_ARROW: 90 });
 
 //Ball
-Crafty.e("2D, DOM, Color, Collision")
-  .color('rgb(0,0,255)')
+Crafty.e('2D, DOM, Color, Collision')
+  .color('rgb(165, 42, 42)')
+
   .attr({ x: 300, y: 150, w: 10, h: 10,
       dX: Crafty.math.randomInt(2, 5),
       dY: Crafty.math.randomInt(2, 5) })
-  .bind('EnterFrame', function () {
+  .bind('EnterFrame', function (){
     //hit floor or roof
     if (this.y <= 0 || this.y >= 290)
       this.dY *= -1;
 
     if (this.x > 600) {
       this.x = 300;
-      Crafty("LeftPoints").each(function () {
-        this.text(++this.points + " Points") });
+      Crafty('LeftPoints').each(function (){
+        this.text(++this.points + ' Points') });
     }
     if (this.x < 10) {
       this.x = 300;
-      Crafty("RightPoints").each(function () {
-        this.text(++this.points + " Points") });
+      Crafty('RightPoints').each(function (){
+        this.text(++this.points + ' Points') });
     }
 
     this.x += this.dX;
     this.y += this.dY;
   })
-  .onHit('Paddle', function () {
+  .onHit('Paddle', function (){
   this.dX *= -1;
 })
 
 //Score boards
-Crafty.e("LeftPoints, DOM, 2D, Text")
+Crafty.e('LeftPoints, DOM, 2D, Text')
   .attr({ x: 20, y: 20, w: 100, h: 20, points: 0 })
-  .text("0 Points");
-Crafty.e("RightPoints, DOM, 2D, Text")
+  .textColor('#FFFFFF', 0.8)
+  .text('0 Points');
+Crafty.e('RightPoints, DOM, 2D, Text')
   .attr({ x: 515, y: 20, w: 100, h: 20, points: 0 })
-  .text("0 Points");
+  .textColor('#FFFFFF', 0.8)
+  .text('0 Points');
