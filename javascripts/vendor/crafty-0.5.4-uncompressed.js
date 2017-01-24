@@ -1,10 +1,11 @@
 /*!
-* Crafty v0.5.1
+* Crafty v0.5.4
 * http://craftyjs.com
 *
-* Copyright 2010, Louis Stowasser
+* Copyright 2010-2013, Louis Stowasser
 * Dual licensed under the MIT or GPL licenses.
 */
+
 
 (function (window, initComponents, undefined) {
     /**@
@@ -14,6 +15,8 @@
     *
     * Crafty uses syntax similar to jQuery by having a selector engine to select entities by their components.
     *
+    * If there is more than one match, the return value is an Array-like object listing the ID numbers of each matching entity. If there is exactly one match, the entity itself is returned. If you're not sure how many matches to expect, check the number of matches via Crafty(...).length. Alternatively, use Crafty(...).each(...), which works in all cases.
+    *
     * @example
     * ~~~
     *    Crafty("MyComponent")
@@ -22,6 +25,12 @@
     * ~~~
     * 
     * The first selector will return all entities that have the component `MyComponent`. The second will return all entities that have `Hello` and `2D` and `Component` whereas the last will return all entities that have at least one of those components (or).
+    *
+    * ~~~
+    *   Crafty("*")
+    * ~~~
+    * Passing `*` will select all entities.
+    *
     * ~~~
     *   Crafty(1)
     * ~~~
@@ -47,7 +56,6 @@
 
     	components = {}; //map of components and their functions
     	entities = {}; //map of entities and their data
-        entityFactories = {}; //templates of entities
     	handlers = {}; //global event handlers
     	onloads = []; //temporary storage of onload handlers
     	tick;
@@ -98,11 +106,19 @@
                 i, l;
 
                 if (selector === '*') {
+                    i = 0;
                     for (e in entities) {
-                        this[+e] = entities[e];
-                        elem++;
+                        // entities is something like {2:entity2, 3:entity3, 11:entity11, ...}
+                        // The for...in loop sets e to "2", "3", "11", ... i.e. all
+                        // the entity ID numbers. e is a string, so +e converts to number type.
+                        this[i] = +e;
+                        i++;
                     }
-                    this.length = elem;
+                    this.length = i;
+                    // if there's only one entity, return the actual entity
+                    if (i === 1) {
+                        return entities[this[0]];
+                    }
                     return this;
                 }
 
@@ -141,6 +157,11 @@
                 if (comps && and) for (i = 0; i < l; i++) this.extend(components[comps[i]]);
 
                 this.length = elem; //length is the last index (already incremented)
+				
+				// if there's only one entity, return the actual entity
+				if (elem === 1) {
+					return entities[this[elem-1]];
+				}
 
             } else { //Select a specific entity
 
@@ -216,13 +237,12 @@
         */
         addComponent: function (id) {
             var uninit = [], c = 0, ul, //array of components to init
-            i = 0, l, comps;
+            i = 0, l, comps, comp;
 
             //add multiple arguments
             if (arguments.length > 1) {
                 l = arguments.length;
                 for (; i < l; i++) {
-                    this.__c[arguments[i]] = true;
                     uninit.push(arguments[i]);
                 }
                 //split components if contains comma
@@ -230,43 +250,52 @@
                 comps = id.split(rlist);
                 l = comps.length;
                 for (; i < l; i++) {
-                    this.__c[comps[i]] = true;
                     uninit.push(comps[i]);
                 }
                 //single component passed
             } else {
-                this.__c[id] = true;
                 uninit.push(id);
             }
 
             //extend the components
             ul = uninit.length;
             for (; c < ul; c++) {
+                if (this.__c[uninit[c]] == true)
+                    continue
+                this.__c[uninit[c]] = true
                 comp = components[uninit[c]];
                 this.extend(comp);
-
                 //if constructor, call it
                 if (comp && "init" in comp) {
                     comp.init.call(this);
                 }
             }
 
-            this.trigger("NewComponent", ul);
+            this.trigger("NewComponent", uninit);
             return this;
         },
 
         /**@
         * #.toggleComponent
         * @comp Crafty Core
-        * @sign public this. toggleComponent(String componentID,String componentToggle)
-        * @param componentID - Component ID to add or remove.
-        * @param componentToggle - Component ID to replace instead of remove
-        * Add or Remove Components
+        * @sign public this .toggleComponent(String ComponentList)
+        * @param ComponentList - A string of components to add or remove separated by a comma `,`
+        * @sign public this .toggleComponent(String Component1[, .., String componentN])
+        * @param Component# - Component ID to add or remove.
+        * Add or Remove Components from an entity.
         * 
         * @example
         * ~~~
         * var e = Crafty.e("2D,DOM,Test");
-        * e.toggleComponent("Test,Test2"); //Remove Test add Test2 and vice versa
+        * e.toggleComponent("Test,Test2"); //Remove Test, add Test2
+        * e.toggleComponent("Test,Test2"); //Add Test, remove Test2
+        * ~~~
+        *
+        * ~~~
+        * var e = Crafty.e("2D,DOM,Test");
+        * e.toggleComponent("Test","Test2"); //Remove Test, add Test2
+        * e.toggleComponent("Test","Test2"); //Add Test, remove Test2
+        * e.toggleComponent("Test");         //Remove Test
         * ~~~
         */
        toggleComponent:function(toggle){
@@ -340,6 +369,13 @@
         * Removes a component from an entity. A soft remove (the default) will only
         * refrain `.has()` from returning true. Hard will remove all
         * associated properties and methods.
+        *
+        * @example
+        * ~~~
+        * var e = Crafty.e("2D,DOM,Test");
+        * e.removeComponent("Test");        //Soft remove Test component
+        * e.removeComponent("Test", false); //Hard remove Test component
+        * ~~~
         */
         removeComponent: function (id, soft) {
             if (soft === false) {
@@ -470,6 +506,8 @@
         *
         * Events are arbitrary and provide communication between components.
         * You can trigger or bind an event even if it doesn't exist yet.
+        *
+        * Unlike DOM events, Crafty events are exectued synchronously.
         * 
         * @example
         * ~~~
@@ -485,6 +523,9 @@
         * @see .trigger, .unbind
         */
         bind: function (event, callback) {
+        
+            // (To learn how the handlers object works, see inline comment at Crafty.bind)
+
             //optimization for 1 entity
             if (this.length === 1) {
                 if (!handlers[event]) handlers[event] = {};
@@ -520,6 +561,7 @@
         * @see .bind, .trigger
         */
         unbind: function (event, callback) {
+            // (To learn how the handlers object works, see inline comment at Crafty.bind)
             this.each(function () {
                 var hdl = handlers[event], i = 0, l, current;
                 //if no events, cancel
@@ -557,8 +599,11 @@
         *
         * The first argument is the event name to trigger and the optional
         * second argument is the arbitrary event data. This can be absolutely anything.
+        *
+        * Unlike DOM events, Crafty events are exectued synchronously.
         */
         trigger: function (event, data) {
+            // (To learn how the handlers object works, see inline comment at Crafty.bind)
             if (this.length === 1) {
                 //find the handlers assigned to the event and entity
                 if (handlers[event] && handlers[event][this[0]]) {
@@ -584,6 +629,7 @@
 
         /**@
         * #.each
+        * @comp Crafty Core
         * @sign public this .each(Function method)
         * @param method - Method to call on each iteration
         * Iterates over found entities, calling a function for every entity.
@@ -719,11 +765,13 @@
         * @category Core
         * @trigger EnterFrame - on each frame - { frame: Number }
         * @trigger Load - Just after the viewport is initialised. Before the EnterFrame loops is started
-        * @sign public this Crafty.init([Number width, Number height])
-        * @param width - Width of the stage
-        * @param height - Height of the stage
-        * 
-        * Create a div with id `cr-stage`, if there is not already an HTMLElement with id `cr-stage` (by `Crafty.viewport.init`).
+        * @sign public this Crafty.init([Number width, Number height, String stage_elem])
+        * @sign public this Crafty.init([Number width, Number height, HTMLElement stage_elem])
+        * @param Number width - Width of the stage
+        * @param Number height - Height of the stage
+        * @param String or HTMLElement stage_elem - the element to use for the stage    
+        *
+        * Sets the element to use as the stage, creating it if necessary.  By default a div with id 'cr-stage' is used, but if the 'stage_elem' argument is provided that will be used instead.  (see `Crafty.viewport.init`)     
         *
         * Starts the `EnterFrame` interval. This will call the `EnterFrame` event for every frame.
         *
@@ -734,8 +782,8 @@
         * Uses `requestAnimationFrame` to sync the drawing with the browser but will default to `setInterval` if the browser does not support it.
         * @see Crafty.stop,  Crafty.viewport
         */
-        init: function (w, h) {
-            Crafty.viewport.init(w, h);
+        init: function (w, h, stage_elem) {
+            Crafty.viewport.init(w, h, stage_elem);
 
             //call all arbitrary functions attached to onload
             this.trigger("Load");
@@ -752,11 +800,11 @@
         *
         * @example
         * ~~~
-        * Crafty.getVersion(); //'0.5.0'
+        * Crafty.getVersion(); //'0.5.4'
         * ~~~
         */
         getVersion: function () {
-            return '0.5.1';
+            return '0.5.4';
         },
 
         /**@
@@ -774,9 +822,10 @@
         stop: function (clearState) {
         	this.timer.stop();
         	if (clearState) {
+        	    Crafty.audio.remove();
         		if (Crafty.stage && Crafty.stage.elem.parentNode) {
         			var newCrStage = document.createElement('div');
-        			newCrStage.id = "cr-stage";
+        			newCrStage.id = Crafty.stage.elem.id;
         			Crafty.stage.elem.parentNode.replaceChild(newCrStage, Crafty.stage.elem);
         		}
         		initState();
@@ -846,7 +895,7 @@
         timer: {
             prev: (+new Date),
             current: (+new Date),
-            curTime: Date.now(),
+            currentTime: +new Date(),
             frames:0,
             frameTime:0,
             init: function () {
@@ -894,11 +943,11 @@
             */
             step: function () {
                 loops = 0;
-                this.curTime = Date.now();
-                if (this.curTime - nextGameTick > 60 * milliSecPerFrame) {
-                    nextGameTick = this.curTime - milliSecPerFrame;
+                this.currentTime = +new Date();
+                if (this.currentTime - nextGameTick > 60 * milliSecPerFrame) {
+                    nextGameTick = this.currentTime - milliSecPerFrame;
                 }
-                while (this.curTime > nextGameTick) {
+                while (this.currentTime > nextGameTick) {
                     Crafty.trigger("EnterFrame", { frame: frame++ });
                     nextGameTick += milliSecPerFrame;
                     loops++;
@@ -906,10 +955,10 @@
                 if (loops) {
                     Crafty.DrawManager.draw();
                 }
-               if(this.curTime > this.frameTime){
+               if(this.currentTime > this.frameTime){
                     Crafty.trigger("MessureFPS",{value:this.frame});
                     this.frame = 0;
-                    this.frameTime = this.curTime + 1000;
+                    this.frameTime = this.currentTime + 1000;
                 }else{
                     this.frame++;
                 }
@@ -939,69 +988,6 @@
                 Crafty.DrawManager.draw();
             }
 
-        },
-
-        /**@
-        * #Crafty.addEntityFactory
-        * @category Core
-        * @param name - Name of the entity factory.
-        * @param callback - Function containing the entity creation procedure.
-        * 
-        * Registers an Entity Factory.  An Entity Factory allows for the repeatable creation of an Entity.
-        *
-        * @example
-        * ~~~
-        * Crafty.addEntityFactory('Projectile', function() {
-        *   var entity = Crafty.e('2D, Canvas, Color, Physics, Collision')
-        *   .color("red")
-        *   .attr({
-        *     w: 3,
-        *     h: 3,
-        *     x: this.x,
-        *     y: this.y
-        *   })
-        *   .addComponent('Gravity').gravity("Floor");
-        *   
-        *   return entity;
-        * });
-        * ~~~
-        * 
-        * @see Crafty.e
-        */
-        addEntityFactory: function(name, callback) {
-            this.entityFactories[name] = callback;
-        },
-
-        /**@
-        * #Crafty.newFactoryEntity
-        * @category Core
-        * @param name - Name of the entity factory.
-        * 
-        * Creates a new entity based on a specific Entity Factory.
-        *
-        * @example
-        * ~~~
-        * Crafty.addEntityFactory('Projectile', function() {
-        *   var entity = Crafty.e('2D, Canvas, Color, Physics, Collision')
-        *   .color("red")
-        *   .attr({
-        *     w: 3,
-        *     h: 3,
-        *     x: this.x,
-        *     y: this.y
-        *   })
-        *   .addComponent('Gravity').gravity("Floor");
-        *   
-        *   return entity;
-        * });
-        *
-        * Crafty.newFactoryEntity('Projectile'); // This returns a new Projectile Entity.
-        * ~~~
-        * 
-        * @see Crafty.e
-        */
-        newFactoryEntity: function(name) {
-            return this.entityTemplates[name]();
         },
 
         /**@
@@ -1106,6 +1092,7 @@
         * @see Crafty.bind
         */
         trigger: function (event, data) {
+            // (To learn how the handlers object works, see inline comment at Crafty.bind)
             var hdl = handlers[event], h, i, l;
             //loop over every object bound
             for (h in hdl) {
@@ -1139,6 +1126,26 @@
         * @see Crafty.trigger, Crafty.unbind
         */
         bind: function (event, callback) {
+            
+            // Background: The structure of the global object "handlers"
+            // ---------------------------------------------------------
+            // Here is an example of what "handlers" can look like:
+            // handlers ===
+            //    { Move:  {5:[fnA], 6:[fnB, fnC], global:[fnD]},
+            //     Change: {6:[fnE]}
+            //    }
+            // In this example, when the 'Move' event is triggered on entity #6 (e.g.
+            // entity6.trigger('Move')), it causes the execution of fnB() and fnC(). When
+            // the Move event is triggered globally (i.e. Crafty.trigger('Move')), it
+            // will execute fnA, fnB, fnC, fnD.
+            // 
+            // In this example, "this" is bound to entity #6 whenever fnB() is executed, and
+            // "this" is bound to Crafty whenever fnD() is executed.
+            //
+            // In other words, the structure of "handlers" is:
+            //
+            // handlers[event][entityID or 'global'] === (Array of callback functions)
+
             if (!handlers[event]) handlers[event] = {};
             var hdl = handlers[event];
 
@@ -1156,30 +1163,52 @@
         * @param callbackID - ID of the callback
         * @returns True or false depending on if a callback was unbound
         * Unbind any event from any entity or global event.
+        * @example
+        * ~~~
+        *    var play_gameover_sound = function () {...};
+        *    Crafty.bind('GameOver', play_gameover_sound);
+        *    ...
+        *    Crafty.unbind('GameOver', play_gameover_sound);
+        * ~~~
+        * 
+        * The first line defines a callback function. The second line binds that
+        * function so that `Crafty.trigger('GameOver')` causes that function to
+        * run. The third line unbinds that function.
+        *  
+        * ~~~
+        *    Crafty.unbind('GameOver');
+        * ~~~
+        * 
+        * This unbinds ALL global callbacks for the event 'GameOver'. That
+        * includes all callbacks attached by `Crafty.bind('GameOver', ...)`, but
+        * none of the callbacks attached by `some_entity.bind('GameOver', ...)`.
         */
         unbind: function (event, callback) {
-            var hdl = handlers[event], h, i, l;
+            // (To learn how the handlers object works, see inline comment at Crafty.bind)
+            var hdl = handlers[event], i, l, global_callbacks, found_match;
 
-            //loop over every object bound
-            for (h in hdl) {
-                if (!hdl.hasOwnProperty(h)) continue;
-
-                //if passed the ID
-                if (typeof callback === "number") {
-                    delete hdl[h][callback];
-                    return true;
-                }
-
-                //loop over every handler within object
-                for (i = 0, l = hdl[h].length; i < l; i++) {
-                    if (hdl[h][i] === callback) {
-                        delete hdl[h][i];
-                        return true;
-                    }
-                }
+            if (hdl === undefined || hdl['global'] === undefined
+                                           || hdl['global'].length === 0) {
+                return false;
             }
 
-            return false;
+            // If no callback was supplied, delete everything
+            if (arguments.length === 1) {
+                delete hdl['global'];
+                return true;
+            }
+
+            // loop over the globally-attached events
+            global_callbacks = hdl['global'];
+            found_match = false;
+            for (i=0, l=global_callbacks.length; i < l; i++) {
+                if (global_callbacks[i] === callback) {
+                    found_match = true;
+                    global_callbacks.splice(i, 1);
+                    i--;
+                }
+            }
+            return found_match;
         },
 
         /**@
@@ -1316,10 +1345,16 @@
 
     //make Crafty global
     window.Crafty = Crafty;
+
+    if (typeof define === 'function') {
+        define('crafty', [], function() { return Crafty; });
+    }
 })(window,
+
 
 //wrap around components
 function(Crafty, window, document) {
+
 
 /**
 * Spatial HashMap for broad phase collision
@@ -1345,7 +1380,8 @@ function(Crafty, window, document) {
 		this.map = {};
 	},
 
-	SPACE = " ";
+	SPACE = " ",
+	keyHolder ={};
 
 	HashMap.prototype = {
 	/**@
@@ -1372,7 +1408,7 @@ function(Crafty, window, document) {
 			for (i = keys.x1; i <= keys.x2; i++) {
 				//insert into all y buckets
 				for (j = keys.y1; j <= keys.y2; j++) {
-					hash = i + SPACE + j;
+					hash = (i << 16)^j;
 					if (!this.map[hash]) this.map[hash] = [];
 					this.map[hash].push(obj);
 				}
@@ -1392,10 +1428,10 @@ function(Crafty, window, document) {
     * - If `filter` is `true`, filter the above results by checking that they actually overlap `rect`.
     * The easier usage is with `filter`=`true`. For performance reason, you may use `filter`=`false`, and filter the result yourself. See examples in drawing.js and collision.js
 	*/
+
 		search: function (rect, filter) {
-			var keys = HashMap.key(rect),
-			i, j,
-			hash,
+			var keys = HashMap.key(rect, keyHolder ),
+			i, j,k,
 			results = [];
 
 			if (filter === undefined) filter = true; //default filter to true
@@ -1404,11 +1440,11 @@ function(Crafty, window, document) {
 			for (i = keys.x1; i <= keys.x2; i++) {
 				//insert into all y buckets
 				for (j = keys.y1; j <= keys.y2; j++) {
-					hash = i + SPACE + j;
-
-					if (this.map[hash]) {
-						results = results.concat(this.map[hash]);
-					}
+					cell = this.map[(i << 16)^j];
+					if (cell) {
+                        for (k = 0; k<cell.length; k++)
+                            results.push(cell[k])
+					}	
 				}
 			}
 
@@ -1455,19 +1491,18 @@ function(Crafty, window, document) {
 
 			if (arguments.length == 1) {
 				obj = keys;
-				keys = HashMap.key(obj);
+				keys = HashMap.key(obj, keyHolder);
 			}
 
 			//search in all x buckets
 			for (i = keys.x1; i <= keys.x2; i++) {
 				//insert into all y buckets
 				for (j = keys.y1; j <= keys.y2; j++) {
-					hash = i + SPACE + j;
+					hash = (i << 16)^j;
 
 					if (this.map[hash]) {
 						var cell = this.map[hash],
-						m,
-						n = cell.length;
+						 m, n = cell.length;
 						//loop over objs in cell and delete
 						for (m = 0; m < n; m++)
 							if (cell[m] && cell[m][0] === obj[0])
@@ -1476,6 +1511,58 @@ function(Crafty, window, document) {
 				}
 			}
 		},
+
+	/**@
+	* #Crafty.map.refresh
+	* @comp Crafty.map
+	* @sign public void Crafty.map.remove(Entry entry)
+	* @param entry - An entry to update
+	* 
+	* Refresh an entry's keys, and its position in the broad phrase map.
+	*
+	* @example 
+	* ~~~
+	* Crafty.map.refresh(e);
+	* ~~~
+	*/
+		refresh: function(entry) {
+				var keys = entry.keys;
+				var obj = entry.obj;
+				var cell, i, j, m, n;
+
+				//First delete current object from appropriate cells
+				for (i = keys.x1; i <= keys.x2; i++) {
+					for (j = keys.y1; j <= keys.y2; j++) {
+						cell = this.map[(i << 16)^j];
+						if (cell) {
+							n = cell.length;
+							//loop over objs in cell and delete
+							for (m = 0; m < n; m++)
+								if (cell[m] && cell[m][0] === obj[0])
+									cell.splice(m, 1);
+						}
+					}
+				}
+
+				//update keys
+				HashMap.key(obj, keys);
+
+				//insert into all rows and columns
+				for (i = keys.x1; i <= keys.x2; i++) {
+					for (j = keys.y1; j <= keys.y2; j++) {
+						cell = this.map[(i << 16)^j];
+						if (!cell) cell=this.map[(i << 16)^j] = [];
+						cell.push(obj);
+					}
+				}
+
+			return entry;
+		},
+
+
+
+
+		
 
 	/**@
 	* #Crafty.map.boundaries
@@ -1512,9 +1599,9 @@ function(Crafty, window, document) {
 				if (!this.map[h].length) continue;
 
         //broad phase coordinate
-				var map_coord = h.split(SPACE),
-					i=map_coord[0],
-					j=map_coord[0];
+				var i= h>>16,
+					j=(h<<16)>>16;
+				if (j<0) { i = i^-1 }
 				if (i >= hash.max.x) {
 					hash.max.x = i;
 					for (k in this.map[h]) {
@@ -1580,15 +1667,19 @@ function(Crafty, window, document) {
     * 
     * @see Crafty.HashMap.constructor
 	*/
-	HashMap.key = function (obj) {
-		if (obj.hasOwnProperty('mbr')) {
-			obj = obj.mbr();
+	HashMap.key = function (obj, keys) {
+		if (obj._mbr) {
+			obj = obj._mbr
 		}
-		var x1 = Math.floor(obj._x / cellsize),
-		y1 = Math.floor(obj._y / cellsize),
-		x2 = Math.floor((obj._w + obj._x) / cellsize),
-		y2 = Math.floor((obj._h + obj._y) / cellsize);
-		return { x1: x1, y1: y1, x2: x2, y2: y2 };
+		if (!keys){
+			keys = {}
+		}
+
+		keys.x1 = Math.floor(obj._x / cellsize);
+		keys.y1 = Math.floor(obj._y / cellsize);
+		keys.x2 = Math.floor((obj._w + obj._x) / cellsize);
+		keys.y2 = Math.floor((obj._h + obj._y) / cellsize);
+		return keys;
 	};
 
 	HashMap.hash = function (keys) {
@@ -1599,15 +1690,13 @@ function(Crafty, window, document) {
 		this.keys = keys;
 		this.map = map;
 		this.obj = obj;
-	}
+	};
 
 	Entry.prototype = {
 		update: function (rect) {
 			//check if buckets change
-			if (HashMap.hash(HashMap.key(rect)) != HashMap.hash(this.keys)) {
-				this.map.remove(this.keys, this.obj);
-				var e = this.map.insert(this.obj);
-				this.keys = e.keys;
+			if (HashMap.hash(HashMap.key(rect, keyHolder)) != HashMap.hash(this.keys)) {
+					this.map.refresh(this)
 			}
 		}
 	};
@@ -1615,10 +1704,11 @@ function(Crafty, window, document) {
 	parent.HashMap = HashMap;
 })(Crafty);
 
+
 /**@
 * #Crafty.map
 * @category 2D
-* Functions related with querying entities. 
+* Functions related with querying entities.
 * @see Crafty.HashMap
 */
 Crafty.map = new Crafty.HashMap();
@@ -1688,16 +1778,32 @@ Crafty.c("2D", {
 	* A higher `z` value will be closer to the front of the stage. A smaller `z` value will be closer to the back.
 	* A global Z index is produced based on its `z` value as well as the GID (which entity was created first).
 	* Therefore entities will naturally maintain order depending on when it was created if same z value.
+	*
+	* `z` is required to be an integer, e.g. `z=11.2` is not allowed.
 	* @see ._attr
 	*/
 	_z: 0,
 	/**@
 	* #.rotation
 	* @comp 2D
-	* Set the rotation of your entity. Rotation takes degrees in a clockwise direction.
-	* It is important to note there is no limit on the rotation value. Setting a rotation
-	* mod 360 will give the same rotation without reaching huge numbers.
-	* @see ._attr
+	* The rotation state of the entity, in clockwise degrees.
+	* `this.rotation = 0` sets it to its original orientation; `this.rotation = 10`
+	* sets it to 10 degrees clockwise from its original orientation;
+	* `this.rotation = -10` sets it to 10 degrees counterclockwise from its
+	* original orientation, etc.
+	* 
+	* When modified, will automatically be redrawn. Is actually a getter/setter
+	* so when using this value for calculations and not modifying it,
+	* use the `._rotation` property.
+	*
+	* `this.rotation = 0` does the same thing as `this.rotation = 360` or `720` or
+	* `-360` or `36000` etc. So you can keep increasing or decreasing the angle for continuous
+	* rotation. (Numerical errors do not occur until you get to millions of degrees.)
+	*
+	* The default is to rotate the entity around its (initial) top-left corner; use
+	* `.origin()` to change that.
+	*
+	* @see ._attr, .origin
 	*/
 	_rotation: 0,
 	/**@
@@ -1906,11 +2012,21 @@ Crafty.c("2D", {
 		this.bind("Remove", function () {
 			if (this._children) {
 				for (var i = 0; i < this._children.length; i++) {
+					// delete the child's _parent link, or else the child will splice itself out of
+					// this._children while destroying itself (which messes up this for-loop iteration).
+					delete this._children[i]._parent;
+					
+					// Destroy child if possible (It's not always possible, e.g. the polygon attached
+					// by areaMap has no .destroy(), it will just get garbage-collected.)
 					if (this._children[i].destroy) {
 						this._children[i].destroy();
 					}
 				}
 				this._children = [];
+			}
+			
+			if (this._parent) {
+				this._parent.detach(this);
 			}
 
 			Crafty.map.remove(this);
@@ -2177,12 +2293,18 @@ Crafty.c("2D", {
 	* #.attach
 	* @comp 2D
 	* @sign public this .attach(Entity obj[, .., Entity objN])
-	* @param obj - Entity(s) to attach
-	* Attaches an entities position and rotation to current entity. When the current entity moves,
-	* the attached entity will move by the same amount. Attached entities stored in _children array,
-	* the parent object is stored in _parent on the child entities.
+	* @param obj - Child entity(s) to attach
+	* Sets one or more entities to be children, with the current entity (`this`)
+	* as the parent. When the parent moves or rotates, its children move or
+	* rotate by the same amount. (But not vice-versa: If you move a child, it
+	* will not move the parent.) When the parent is destroyed, its children are
+	* destroyed.
+	* 
+	* For any entity, `this._children` is the array of its children entity
+	* objects (if any), and `this._parent` is its parent entity object (if any).
 	*
-	* As many objects as wanted can be attached and a hierarchy of objects is possible by attaching.
+	* As many objects as wanted can be attached, and a hierarchy of objects is
+	* possible by attaching.
 	*/
 	attach: function () {
 		var i = 0, arg = arguments, l = arguments.length, obj;
@@ -2234,7 +2356,7 @@ Crafty.c("2D", {
 	* @sign public this .origin(String offset)
 	* @param offset - Combination of center, top, bottom, middle, left and right
 	* Set the origin point of an entity for it to rotate around.
-	* 
+	*
 	* @example
 	* ~~~
 	* this.origin("top left")
@@ -2242,7 +2364,7 @@ Crafty.c("2D", {
 	* this.origin("bottom right")
 	* this.origin("middle right")
 	* ~~~
-	* 
+	*
 	* @see .rotation
 	*/
 	origin: function (x, y) {
@@ -2275,9 +2397,9 @@ Crafty.c("2D", {
 	* @trigger Change - when the entity has flipped
 	* @sign public this .flip(String dir)
 	* @param dir - Flip direction
-	* 
+	*
 	* Flip entity on passed direction
-	* 
+	*
 	* @example
 	* ~~~
 	* this.flip("X")
@@ -2290,16 +2412,16 @@ Crafty.c("2D", {
                     this.trigger("Change");
                 }
 	},
-        
+
         /**@
 	* #.unflip
 	* @comp 2D
 	* @trigger Change - when the entity has unflipped
 	* @sign public this .unflip(String dir)
 	* @param dir - Unflip direction
-	* 
+	*
 	* Unflip entity on passed direction (if it's flipped)
-	* 
+	*
 	* @example
 	* ~~~
 	* this.unflip("X")
@@ -2322,7 +2444,7 @@ Crafty.c("2D", {
 		this._origin.y = e.o.y - this._y;
 
 		//modify through the setter method
-		this._attr('_rotation', e.theta);
+		this._attr('_rotation', this._rotation - e.deg);
 	},
 
 	/**@
@@ -2332,6 +2454,10 @@ Crafty.c("2D", {
 	* x, y, w, h, alpha, rotation and visible.
 	*/
 	_attr: function (name, value) {
+		// Return if there is no change
+		if (this[name] === value){
+			return
+		}
 		//keep a reference of the old positions
 		var pos = this.pos(),
 			old = this.mbr() || pos;
@@ -2392,12 +2518,12 @@ Crafty.c("Gravity", {
 	* @comp Gravity
 	* @sign public this .gravity([comp])
 	* @param comp - The name of a component that will stop this entity from falling
-	* 
-	* Enable gravity for this entity no matter whether comp parameter is not specified, 
+	*
+	* Enable gravity for this entity no matter whether comp parameter is not specified,
 	* If comp parameter is specified all entities with that component will stop this entity from falling.
 	* For a player entity in a platform game this would be a component that is added to all entities
 	* that the player should be able to walk on.
-	* 
+	*
 	* @example
 	* ~~~
 	* Crafty.e("2D, DOM, Color, Gravity")
@@ -2419,9 +2545,9 @@ Crafty.c("Gravity", {
 	* @comp Gravity
 	* @sign public this .gravityConst(g)
 	* @param g - gravitational constant
-	* 
+	*
 	* Set the gravitational constant to g. The default is .2. The greater g, the faster the object falls.
-	* 
+	*
 	* @example
 	* ~~~
 	* Crafty.e("2D, DOM, Color, Gravity")
@@ -2499,7 +2625,7 @@ Crafty.c("Gravity", {
 /**@
 * #Crafty.polygon
 * @category 2D
-* 
+*
 * Polygon object used for hitboxes and click maps. Must pass an Array for each point as an
 * argument where index 0 is the x position and index 1 is the y position.
 *
@@ -2531,9 +2657,9 @@ Crafty.polygon.prototype = {
 	* @sign public Boolean .containsPoint(Number x, Number y)
 	* @param x - X position of the point
 	* @param y - Y position of the point
-	* 
+	*
 	* Method is used to determine if a given point is contained by the polygon.
-	* 
+	*
 	* @example
 	* ~~~
 	* var poly = new Crafty.polygon([50,0],[100,100],[0,100]);
@@ -2559,9 +2685,9 @@ Crafty.polygon.prototype = {
 	* @sign public void .shift(Number x, Number y)
 	* @param x - Amount to shift the `x` axis
 	* @param y - Amount to shift the `y` axis
-	* 
+	*
 	* Shifts every single point in the polygon by the specified amount.
-	* 
+	*
 	* @example
 	* ~~~
 	* var poly = new Crafty.polygon([50,0],[100,100],[0,100]);
@@ -2633,9 +2759,9 @@ Crafty.circle.prototype = {
 	* @sign public Boolean .containsPoint(Number x, Number y)
 	* @param x - X position of the point
 	* @param y - Y position of the point
-	* 
+	*
 	* Method is used to determine if a given point is contained by the circle.
-	* 
+	*
 	* @example
 	* ~~~
 	* var circle = new Crafty.circle(0, 0, 10);
@@ -2658,9 +2784,9 @@ Crafty.circle.prototype = {
 	* @sign public void .shift(Number x, Number y)
 	* @param x - Amount to shift the `x` axis
 	* @param y - Amount to shift the `y` axis
-	* 
+	*
 	* Shifts the circle by the specified amount.
-	* 
+	*
 	* @example
 	* ~~~
 	* var poly = new Crafty.circle(0, 0, 10);
@@ -2720,6 +2846,7 @@ Crafty.matrix.prototype = {
 	}
 }
 
+
 /**@
 * #Collision
 * @category 2D
@@ -2744,7 +2871,7 @@ Crafty.c("Collision", {
         this.requires("2D");
         var area = this._mbr || this;
 
-        poly = new Crafty.polygon([0, 0], [area._w, 0], [area._w, area._h], [0, area._h]);
+        var poly = new Crafty.polygon([0, 0], [area._w, 0], [area._w, area._h], [0, area._h]);
         this.map = poly;
         this.attach(this.map);
         this.map.shift(area._x, area._y);
@@ -2874,10 +3001,10 @@ Crafty.c("Collision", {
 	* @comp Collision
 	* @sign public this .onHit(String component, Function hit[, Function noHit])
 	* @param component - Component to check collisions for
-	* @param hit - Callback method to execute when collided with component
+	* @param hit - Callback method to execute upon collision with component.  Will be passed the results of the collision check in the same format documented for hit().
 	* @param noHit - Callback method executed once as soon as collision stops
 	* 
-	* Creates an enterframe event calling .hit() each time and if collision detected will invoke the callback.
+	* Creates an EnterFrame event calling .hit() each frame.  When a collision is detected the callback will be invoked.  
 	* 
 	* @see .hit
 	*/
@@ -3029,6 +3156,7 @@ Crafty.c("Collision", {
 });
 
 
+
 /**@
 * #.WiredHitBox
 * @comp Collision
@@ -3060,7 +3188,7 @@ Crafty.c("WiredHitBox", {
 			}
 			var ctx = c.getContext('2d');
 			var drawed = 0, total = Crafty("WiredHitBox").length;
-			this.requires("Collision").bind("EnterFrame", function () {
+			var drawBoxFunction = function () {
 				if (drawed == total) {
 					ctx.clearRect(0, 0, Crafty.viewport.width, Crafty.viewport.height);
 					drawed = 0;
@@ -3072,7 +3200,16 @@ Crafty.c("WiredHitBox", {
 				ctx.closePath();
 				ctx.stroke();
 				drawed++;
-
+			};
+			this.requires("Collision").bind("EnterFrame", drawBoxFunction);
+			this.bind('RemoveComponent', function (c) {
+				if (c == 'WiredHitBox') {
+					this.unbind('EnterFrame', drawBoxFunction);
+					if (drawed == total) {
+						ctx.clearRect(0, 0, Crafty.viewport.width, Crafty.viewport.height);
+						drawed = 0;
+					}
+				}
 			});
 		}
 
@@ -3108,7 +3245,7 @@ Crafty.c("SolidHitBox", {
 			}
 			var ctx = c.getContext('2d');
 			var drawed = 0, total = Crafty("SolidHitBox").length;
-			this.requires("Collision").bind("EnterFrame", function () {
+			var drawBoxFunction = function () {
 				if (drawed == total) {
 					ctx.clearRect(0, 0, Crafty.viewport.width, Crafty.viewport.height);
 					drawed = 0;
@@ -3120,12 +3257,23 @@ Crafty.c("SolidHitBox", {
 				ctx.closePath();
 				ctx.fill();
 				drawed++;
+			}
+			this.requires("Collision").bind("EnterFrame", drawBoxFunction);
+			this.bind("RemoveComponent", function (c) {
+				if (c == 'SolidHitBox') {
+					this.unbind('EnterFrame', drawBoxFunction);
+					if (drawed == total) {
+						ctx.clearRect(0, 0, Crafty.viewport.width, Crafty.viewport.height);
+						drawed = 0;
+					}
+				}
 			});
 		}
 
 		return this;
 	}
 });
+
 /**@
 * #DOM
 * @category Graphics
@@ -3151,7 +3299,7 @@ Crafty.c("DOM", {
 		this.bind("Change", function () {
 			if (!this._changed) {
 				this._changed = true;
-				Crafty.DrawManager.add(this);
+				Crafty.DrawManager.addDom(this);
 			}
 		});
 
@@ -3231,7 +3379,7 @@ Crafty.c("DOM", {
 			prefix = Crafty.support.prefix,
 			trans = [];
 
-		if (this._cssStyles.visibility != this._visible) {
+		if (this._cssStyles.visibility !== this._visible) {
 			this._cssStyles.visibility = this._visible;
 			if (!this._visible) {
 				style.visibility = "hidden";
@@ -3244,30 +3392,30 @@ Crafty.c("DOM", {
 		if (Crafty.support.css3dtransform) {
 			trans.push("translate3d(" + (~~this._x) + "px," + (~~this._y) + "px,0)");
 		} else {
-			if (this._cssStyles.left != this._x) {
+			if (this._cssStyles.left !== this._x) {
 				this._cssStyles.left = this._x;
 				style.left = ~~(this._x) + "px";
 			}
-			if (this._cssStyles.top != this._y) {
+			if (this._cssStyles.top !== this._y) {
 				this._cssStyles.top = this._y;
 				style.top = ~~(this._y) + "px";
 			}
 		}
 
-		if (this._cssStyles.width != this._w) {
+		if (this._cssStyles.width !== this._w) {
 			this._cssStyles.width = this._w;
 			style.width = ~~(this._w) + "px";
 		}
-		if (this._cssStyles.height != this._h) {
+		if (this._cssStyles.height !== this._h) {
 			this._cssStyles.height = this._h;
 			style.height = ~~(this._h) + "px";
 		}
-		if (this._cssStyles.zIndex != this._z) {
+		if (this._cssStyles.zIndex !== this._z) {
 			this._cssStyles.zIndex = this._z;
 			style.zIndex = this._z;
 		}
 
-		if (this._cssStyles.opacity != this._alpha) {
+		if (this._cssStyles.opacity !== this._alpha) {
 			this._cssStyles.opacity = this._alpha;
 			style.opacity = this._alpha;
 			style[prefix + "Opacity"] = this._alpha;
@@ -3367,9 +3515,12 @@ Crafty.c("DOM", {
 	*
 	* To return a value, pass the property.
 	* 
+	* Note: For entities with "Text" component, some css properties are controlled by separate functions
+	* `.textFont()` and `.textColor()`, and ignore `.css()` settings. See Text component for details.
+	* 
 	* @example
 	* ~~~
-	* this.css({'text-align', 'center', font: 'Arial'});
+	* this.css({'text-align', 'center', 'text-decoration': 'line-through'});
 	* this.css("textAlign", "center");
 	* this.css("text-align"); //returns center
 	* ~~~
@@ -3517,6 +3668,30 @@ Crafty.extend({
 	}
 });
 
+
+  /**@
+    * #FPS
+    * @category Core
+    * @trigger MessureFPS - each second
+    * Component to last X FPS Messurements
+    * @example
+    * 
+    * Crafty.e("2D,DOM,FPS,Text").attr({maxValues:10}).bind("MessureFPS",function(fps){
+    *   this.text("FPS"+fps.value); //Display Current FPS
+    *   console.log(this.values); // Display last x Values
+    * })
+    */
+  Crafty.c("FPS",{
+         values:[],
+         maxValues:60,
+        init:function(){
+            this.bind("MessureFPS",function(fps){
+                if(this.values.length > this.maxValues) this.values.splice(0,1);
+                this.values.push(fps.value);
+             });
+        }
+    });
+
 /**@
 * #HTML
 * @category Graphics
@@ -3595,6 +3770,7 @@ Crafty.c("HTML", {
 		return this;
 	}
 });
+
 /**@
  * #Storage
  * @category Utilities
@@ -3732,7 +3908,8 @@ Crafty.c("HTML", {
 	 */
 
 Crafty.storage = (function () {
-	var db = null, url, gameName, timestamps = {};
+	var db = null, url, gameName, timestamps = {}, 
+		transactionType = { READ: "readonly", READ_WRITE: "readwrite" };
 
 	/*
 	 * Processes a retrieved object.
@@ -3852,12 +4029,16 @@ Crafty.storage = (function () {
 
 	// everyone names their object different. Fix that nonsense.
 	if (typeof indexedDB != 'object') {
-		if (typeof mozIndexedDB == 'object') {
-			window.indexedDB = mozIndexedDB;
-		}
-		if (typeof webkitIndexedDB == 'object') {
-			window.indexedDB = webkitIndexedDB;
-			window.IDBTransaction = webkitIDBTransaction;
+		window.indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
+		window.IDBTransaction = window.IDBTransaction || window.webkitIDBTransaction;
+		window.IDBKeyRange = window.IDBKeyRange || window.webkitIDBKeyRange || window.msIDBKeyRange
+		
+		/* Numeric constants for transaction type are deprecated
+		 * Ensure that the script will work consistenly for recent and legacy browser versions
+		 */
+		if (typeof IDBTransaction == 'object') {
+			transactionType.READ = IDBTransaction.READ || IDBTransaction.readonly || transactionType.READ || 'read';
+			transactionType.READ_WRITE = IDBTransaction.READ_WRITE || IDBTransaction.readwrite || transactionType.READ_WRITE || 'readwrite';
 		}
 	}
 
@@ -3879,12 +4060,14 @@ Crafty.storage = (function () {
 					stores.push('cache');
 				}
 				if (db == null) {
-					var request = indexedDB.open(gameName, "Database for " + gameName);
+					var request = indexedDB.open(gameName);
 					request.onsuccess = function (e) {
 						db = e.target.result;
-						createStores();
 						getTimestamps();
 						openExternal();
+					};
+					request.onupgradeneeded = function (e) {
+						createStores();
 					};
 				}
 				else {
@@ -3896,7 +4079,7 @@ Crafty.storage = (function () {
 				// get all the timestamps for existing keys
 				function getTimestamps() {
 					try {
-						var trans = db.transaction(['save'], IDBTransaction.READ),
+						var trans = db.transaction(['save'], "read"),
 						store = trans.objectStore('save'),
 						request = store.getAll();
 						request.onsuccess = function (e) {
@@ -3916,13 +4099,13 @@ Crafty.storage = (function () {
 						for (var i = 0; i < stores.length; i++) {
 							var st = stores[i];
 							if (db.objectStoreNames.contains(st)) continue;
-							db.createObjectStore(st, { keyPath: "key" });
+							var store = db.createObjectStore(st, { keyPath: "key" });
 						}
 					};
 				}
 			},
 
-			save: function (key, type, data) {
+			save: function (key, type, data, callback) {
 				if (db == null) {
 					setTimeout(function () { Crafty.storage.save(key, type, data); }, 1);
 					return;
@@ -3931,13 +4114,14 @@ Crafty.storage = (function () {
 				var str = serialize(data), t = ts();
 				if (type == 'save')	saveExternal(key, str, t);
 				try {
-					var trans = db.transaction([type], IDBTransaction.READ_WRITE),
-					store = trans.objectStore(type),
-					request = store.put({
+					var request = db.transaction([type], transactionType.READ_WRITE).objectStore(type).add({
 						"data": str,
 						"timestamp": t,
 						"key": key
 					});
+					if (typeof callback == 'function') {
+						request.onsuccess = callback;
+					}
 				}
 				catch (e) {
 					console.error(e);
@@ -3950,9 +4134,7 @@ Crafty.storage = (function () {
 					return;
 				}
 				try {
-					var trans = db.transaction([type], IDBTransaction.READ),
-					store = trans.objectStore(type),
-					request = store.get(key);
+					var request = db.transaction([type], transactionType.READ).objectStore(type).get(key);
 					request.onsuccess = function (e) {
 						callback(unserialize(e.target.result.data));
 					};
@@ -3967,10 +4149,8 @@ Crafty.storage = (function () {
 					setTimeout(function () { Crafty.storage.getAllkeys(type, callback); }, 1);
 				}
 				try {
-					var trans = db.transaction([type], IDBTransaction.READ),
-					store = trans.objectStore(type),
-					request = store.getCursor(),
-					res = [];
+					var request = db.transaction([type], transactionType.READ).objectStore(type).openCursor(),
+						res = [];
 					request.onsuccess = function (e) {
 						var cursor = e.target.result;
 						if (cursor) {
@@ -4186,6 +4366,7 @@ Crafty.storage = (function () {
 		},
 	}*/
 })();
+
 /**@
 * #Crafty.support
 * @category Misc, Core
@@ -4287,8 +4468,8 @@ Crafty.storage = (function () {
         var gl;
         try {
             gl = document.createElement("canvas").getContext("experimental-webgl");
-            gl.viewportWidth = canvas.width;
-            gl.viewportHeight = canvas.height;
+            gl.viewportWidth = support.canvas.width;
+            gl.viewportHeight = support.canvas.height;
         }
         catch (e) { }
         support.webgl = !!gl;
@@ -4332,15 +4513,16 @@ Crafty.extend({
     /**@
     * #Crafty.sprite
     * @category Graphics
-    * @sign public this Crafty.sprite([Number tile], String url, Object map[, Number paddingX[, Number paddingY]])
+    * @sign public this Crafty.sprite([Number tile, [Number tileh]], String url, Object map[, Number paddingX[, Number paddingY]])
     * @param tile - Tile size of the sprite map, defaults to 1
+    * @param tileh - Height of the tile; if provided, tile is interpreted as the width
     * @param url - URL of the sprite image
     * @param map - Object where the key is what becomes a new component and the value points to a position on the sprite map
     * @param paddingX - Horizontal space in between tiles. Defaults to 0.
     * @param paddingY - Vertical space in between tiles. Defaults to paddingX.
     * Generates components based on positions in a sprite image to be applied to entities.
     *
-    * Accepts a tile size, URL and map for the name of the sprite and it's position.
+    * Accepts a tile size, URL and map for the name of the sprite and its position.
     *
     * The position must be an array containing the position of the sprite where index `0`
     * is the `x` position, `1` is the `y` position and optionally `2` is the width and `3`
@@ -4352,12 +4534,36 @@ Crafty.extend({
     *
     * Entities that add the generated components are also given a component called `Sprite`.
     * 
+    * @example
+    * ~~~
+    * Crafty.sprite("imgs/spritemap6.png", {flower:[0,0,20,30]});
+    * var flower_entity = Crafty.e("2D, DOM, flower");
+    * ~~~
+    * The first line creates a component called `flower` associated with the sub-image of
+    * spritemap6.png with top-left corner (0,0), width 20 pixels, and height 30 pixels.
+    * The second line creates an entity with that image. (Note: `Crafty.e("flower, 2D, DOM")`
+    * would NOT work. When the `2D` component is assigned, it erases the width and height
+    * information. So you should list `2D` before `flower`.)
+    * ~~~
+    * Crafty.sprite(50, "imgs/spritemap6.png", {flower:[0,0], grass:[0,1,3,1]});
+    * ~~~
+    * In this case, the `flower` component is pixels 0 <= x < 50, 0 <= y < 50, and the
+    * `grass` component is pixels 0 <= x < 150, 50 <= y < 100. (The `3` means grass has a
+    * width of 3 tiles, i.e. 150 pixels.)
+    * ~~~
+    * Crafty.sprite(50, 100, "imgs/spritemap6.png", {flower:[0,0], grass:[0,1]}, 10);
+    * ~~~
+    * In this case, each tile is 50x100, and there is a spacing of 10 pixels between
+    * consecutive tiles. So `flower` is pixels 0 <= x < 50, 0 <= y < 100, and `grass` is
+    * pixels 0 <= x < 50, 110 <= y < 210.
+    * 
     * @see Sprite
     */
     sprite: function (tile, tileh, url, map, paddingX, paddingY) {
         var spriteName, temp, x, y, w, h, img;
 
-        //if no tile value, default to 1
+        //if no tile value, default to 1.
+        //(if the first passed argument is a string, it must be the url.)
         if (typeof tile === "string") {
             paddingY = paddingX;
             paddingX = map;
@@ -4456,6 +4662,16 @@ Crafty.extend({
     *
     * Callbacks are passed with event data.
     * 
+    * @example 
+    * Will add a stage-wide MouseDown event listener to the player. Will log which button was pressed
+    * & the (x,y) coordinates in viewport/world/game space.
+    * ~~~
+    * var player = Crafty.e("2D");
+    *     player.onMouseDown = function(e) {
+    *         console.log(e.mouseButton, e.realX, e.realY);
+    *     };
+    * Crafty.addEvent(player, Crafty.stage.elem, "mousedown", player.onMouseDown);
+    * ~~~
     * @see Crafty.removeEvent
     */
     addEvent: function (ctx, obj, type, callback) {
@@ -4576,6 +4792,16 @@ Crafty.extend({
         * simply add `Crafty.viewport.y` onto the entities `y` position.
         */
         _y: 0,
+		
+		/**@
+         * #Crafty.viewport.bounds
+         * @comp Crafty.viewport
+         *
+		 * A rectangle which defines the bounds of the viewport. If this 
+		 * variable is null, Crafty uses the bounding box of all the items
+		 * on the stage.
+         */
+        bounds:null,
 
         /**@
          * #Crafty.viewport.scroll
@@ -4800,7 +5026,7 @@ Crafty.extend({
             }
 
             return function (amt, cent_x, cent_y, time) {
-                var bounds = Crafty.map.boundaries(),
+                var bounds = this.bounds || Crafty.map.boundaries(),
                     final_zoom = amt ? zoom * amt : 1;
 				if (!amt) {	// we're resetting to defaults
 					zoom = 1;
@@ -4843,7 +5069,7 @@ Crafty.extend({
             var prop = Crafty.support.prefix + "Transform",
                 act = {};
             return function (amt) {
-                var bounds = Crafty.map.boundaries(),
+                var bounds = this.bounds || Crafty.map.boundaries(),
                     final_zoom = amt ? this._zoom * amt : 1,
 					czoom = final_zoom / this._zoom;
 
@@ -4918,12 +5144,11 @@ Crafty.extend({
                 }
             };
         })(),
-
         _clamp: function () {
             // clamps the viewport to the viewable area
             // under no circumstances should the viewport see something outside the boundary of the 'world'
             if (!this.clampToEntities) return;
-            var bound = Crafty.map.boundaries();
+            var bound = this.bounds || Crafty.map.boundaries();
 			bound.max.x *= this._zoom;
 			bound.min.x *= this._zoom;
 			bound.max.y *= this._zoom;
@@ -4959,16 +5184,19 @@ Crafty.extend({
         /**@
          * #Crafty.viewport.init
          * @comp Crafty.viewport
-         * @sign public void Crafty.viewport.init([Number width, Number height])
-         * @param width - Width of the viewport
-         * @param height - Height of the viewport
+         * @sign public void Crafty.viewport.init([Number width, Number height, String stage_elem])
+         * @sign public void Crafty.viewport.init([Number width, Number height, HTMLElement stage_elem])
+         * @param Number width - Width of the viewport
+         * @param Number height - Height of the viewport
+         * @param String or HTMLElement stage_elem - the element to use as the stage (either its id or the actual element).
          *
          * Initialize the viewport. If the arguments 'width' or 'height' are missing, or Crafty.mobile is true, use Crafty.DOM.window.width and Crafty.DOM.window.height (full screen model).
-         * Create a div with id `cr-stage`, if there is not already an HTMLElement with id `cr-stage` (by `Crafty.viewport.init`).
+         *
+         * The argument 'stage_elem' is used to specify a stage element other than the default, and can be either a string or an HTMLElement.  If a string is provided, it will look for an element with that id and, if none exists, create a div.  If an HTMLElement is provided, that is used directly.  Omitting this argument is the same as passing an id of 'cr-stage'.
          *
          * @see Crafty.device, Crafty.DOM, Crafty.stage
          */
-        init: function (w, h) {
+        init: function (w, h, stage_elem) {
             Crafty.DOM.window.init();
 
             //fullscreen if mobile or not specified
@@ -4976,7 +5204,16 @@ Crafty.extend({
             this.height = (!h || Crafty.mobile) ? Crafty.DOM.window.height : h;
 
             //check if stage exists
-            var crstage = document.getElementById("cr-stage");
+            if(typeof stage_elem === 'undefined')
+                stage_elem = "cr-stage";
+
+            var crstage;
+            if(typeof stage_elem === 'string')
+                crstage = document.getElementById(stage_elem);
+            else if(typeof HTMLElement !== "undefined" ? stage_elem instanceof HTMLElement : stage_elem instanceof Element)
+                crstage = stage_elem;
+            else
+                throw new TypeError("stage_elem must be a string or an HTMLElement");
 
             /**@
              * #Crafty.stage
@@ -5024,7 +5261,7 @@ Crafty.extend({
 
             Crafty.addEvent(this, window, "blur", function () {
                 if (Crafty.settings.get("autoPause")) {
-                    Crafty.pause();
+                    if(!Crafty._paused) Crafty.pause();
                 }
             });
             Crafty.addEvent(this, window, "focus", function () {
@@ -5051,7 +5288,7 @@ Crafty.extend({
             //add to the body and give it an ID if not exists
             if (!crstage) {
                 document.body.appendChild(Crafty.stage.elem);
-                Crafty.stage.elem.id = "cr-stage";
+                Crafty.stage.elem.id = stage_elem;
             }
 
             var elem = Crafty.stage.elem.style,
@@ -5268,7 +5505,11 @@ Crafty.extend({
     * PLUS: 187,
     * COMMA: 188,
     * MINUS: 189,
-    * PERIOD: 190
+    * PERIOD: 190,
+    * PULT_UP: 29460,
+    * PULT_DOWN: 29461,
+    * PULT_LEFT: 4,
+    * PULT_RIGHT': 5
     * ~~~
     */
     keys: {
@@ -5358,7 +5599,12 @@ Crafty.extend({
         'PLUS': 187,
         'COMMA': 188,
         'MINUS': 189,
-        'PERIOD': 190
+        'PERIOD': 190,
+        'PULT_UP': 29460,
+        'PULT_DOWN': 29461,
+        'PULT_LEFT': 4,
+        'PULT_RIGHT': 5
+
     },
 
     /**@
@@ -5398,6 +5644,7 @@ Crafty.c("viewport", {
         });
     }
 });
+
 
 Crafty.extend({
     /**@
@@ -5554,6 +5801,7 @@ Crafty.extend({
     }
 });
 
+
 /**@
 * #Sprite
 * @category Graphics
@@ -5687,6 +5935,7 @@ Crafty.c("Sprite", {
 	}
 });
 
+
 /**@
 * #Canvas
 * @category Graphics
@@ -5712,19 +5961,25 @@ Crafty.c("Canvas", {
 
 		//increment the amount of canvas objs
 		Crafty.DrawManager.total2D++;
+		//Allocate an object to hold this components current region
+		this.currentRect = {};
+		this._changed = true;
+		Crafty.DrawManager.addCanvas(this);
 
 		this.bind("Change", function (e) {
-			//if within screen, add to list
-			if (this._changed === false) {
-				this._changed = Crafty.DrawManager.add(e || this, this);
-			} else {
-				if (e) this._changed = Crafty.DrawManager.add(e, this);
+			//flag if changed
+			if (this._changed === false){
+				this._changed = true;
+				Crafty.DrawManager.addCanvas(this);
 			}
+			
 		});
+
 
 		this.bind("Remove", function () {
 			Crafty.DrawManager.total2D--;
-			Crafty.DrawManager.add(this, this);
+			this._changed = true;
+			Crafty.DrawManager.addCanvas(this);
 		});
 	},
 
@@ -5740,6 +5995,18 @@ Crafty.c("Canvas", {
 	* 
 	* Method to draw the entity on the canvas element. Can pass rect values for redrawing a segment of the entity.
 	*/
+
+	// Cache the various objects and arrays used in draw:
+	drawVars:{
+		type: "canvas",
+		pos: {},
+		ctx: null,
+		coord: [0, 0, 0, 0],
+		co: {x:0, y:0, w:0, h:0}
+
+
+	},
+
 	draw: function (ctx, x, y, w, h) {
 		if (!this.ready) return;
 		if (arguments.length === 4) {
@@ -5750,20 +6017,20 @@ Crafty.c("Canvas", {
 			ctx = Crafty.canvas.context;
 		}
 
-		var pos = { //inlined pos() function, for speed
-			_x: (this._x + (x || 0)),
-			_y: (this._y + (y || 0)),
-			_w: (w || this._w),
-			_h: (h || this._h)
-		},
-			context = ctx || Crafty.canvas.context,
-			coord = this.__coord || [0, 0, 0, 0],
-			co = {
-			x: coord[0] + (x || 0),
-			y: coord[1] + (y || 0),
-			w: w || coord[2],
-			h: h || coord[3]
-		};
+		var pos = this.drawVars.pos;
+		pos._x = (this._x + (x || 0))
+		pos._y = (this._y + (y || 0))
+		pos._w = (w || this._w)
+		pos._h =(h || this._h)
+
+
+		context = ctx || Crafty.canvas.context;
+		coord =  this.__coord || [0, 0, 0, 0];
+		var co = this.drawVars.co;
+		co.x = coord[0] + (x || 0);
+		co.y = coord[1] + (y || 0)
+		co.w = w || coord[2]
+		co.h = h || coord[3]
 
 		if (this._mbr) {
 			context.save();
@@ -5792,7 +6059,8 @@ Crafty.c("Canvas", {
 			context.globalAlpha = this._alpha;
 		}
 
-		this.trigger("Draw", { type: "canvas", pos: pos, co: co, ctx: context });
+		this.drawVars.ctx = context;
+		this.trigger("Draw", this.drawVars);
 
 		if (this._mbr || (this._flipX || this._flipY)) {
 			context.restore();
@@ -5847,7 +6115,7 @@ Crafty.extend({
 				return;
 			}
 
-			//create 3 empty canvas elements
+			//create an empty canvas element
 			var c;
 			c = document.createElement("canvas");
 			c.width = Crafty.viewport.width;
@@ -5859,9 +6127,15 @@ Crafty.extend({
 			Crafty.stage.elem.appendChild(c);
 			Crafty.canvas.context = c.getContext('2d');
 			Crafty.canvas._canvas = c;
+
+			//Set any existing transformations
+			var zoom = Crafty.viewport._zoom
+			if (zoom != 1)
+				Crafty.canvas.context.scale(zoom, zoom);
 		}
 	}
 });
+
 
 Crafty.extend({
 	over: null, //object mouseover, waiting for out
@@ -5901,7 +6175,28 @@ Crafty.extend({
 
 		Crafty.selected = selected;
 	},
-
+	/**@
+	* #Crafty.mouseDispatch
+	* @category Input
+	*
+	* Internal method which dispatches mouse events received by Crafty (crafty.stage.elem).
+	* The mouse events get dispatched to the closest entity to the source of the event (if available).
+	* 
+	* This method also sets a global property Crafty.lastEvent, which holds the most recent event that 
+	* occured (useful for determining mouse position in every frame).
+	* ~~~
+	* var newestX = Crafty.lastEvent.realX,
+	* 	  newestY = Crafty.lastEvent.realY;
+	* ~~~
+	*
+	* Notable properties of a MouseEvent e:
+	* ~~~
+	* e.clientX, e.clientY	//(x,y) coordinates of mouse event in web browser screen space
+	* e.realX, e.realY		//(x,y) coordinates of mouse event in world/viewport space
+	* e.mouseButton			// Normalized mouse button according to Crafty.mouseButtons
+	* ~~~
+	* @see Crafty.touchDispatch
+	*/
 	mouseDispatch: function (e) {
 		
 		if (!Crafty.mouseObjs) return;
@@ -6112,7 +6407,19 @@ Crafty.extend({
 	* Unicode of the key pressed
 	*/
 	keyboardDispatch: function (e) {
-		e.key = e.keyCode || e.which;
+		// Use a Crafty-standard event object to avoid cross-browser issues
+		var original = e,
+			evnt = {},
+			props = "char charCode keyCode type shiftKey ctrlKey metaKey timestamp".split(" ");
+		for (var i = props.length; i;) {
+			var prop = props[--i];
+			evnt[prop] = original[prop];
+		}
+		evnt.which = original.charCode != null ? original.charCode : original.keyCode;
+		evnt.key = original.keyCode || original.which;
+		evnt.originalEvent = original;
+		e = evnt;
+
 		if (e.type === "keydown") {
 			if (Crafty.keydown[e.key] !== true) {
 				Crafty.keydown[e.key] = true;
@@ -6123,15 +6430,22 @@ Crafty.extend({
 			Crafty.trigger("KeyUp", e);
 		}
 
-		//prevent default actions for all keys except backspace and F1-F12.
+		//prevent default actions for all keys except backspace and F1-F12 and except actions in INPUT and TEXTAREA.
+		//prevent bubbling up for all keys except backspace and F1-F12.
 		//Among others this prevent the arrow keys from scrolling the parent page
 		//of an iframe hosting the game
 		if(Crafty.selected && !(e.key == 8 || e.key >= 112 && e.key <= 135)) {
 			if(e.stopPropagation) e.stopPropagation();
             else e.cancelBubble = true;
 
-			if(e.preventDefault) e.preventDefault();
-			else e.returnValue = false;
+			//Don't prevent default actions if target node is input or textarea.
+			if(e.target && e.target.nodeName !== 'INPUT' && e.target.nodeName !== 'TEXTAREA'){
+				if(e.preventDefault){
+					e.preventDefault();
+				} else {
+					e.returnValue = false;
+				}
+			}
 			return false;
 		}
 	}
@@ -6207,6 +6521,7 @@ Crafty.bind("CraftyStop", function () {
 *        console.log("Clicked right button");
 * })
 * ~~~
+* @see Crafty.mouseDispatch
 */
 Crafty.c("Mouse", {
 	init: function () {
@@ -6439,7 +6754,9 @@ Crafty.c("Draggable", {
 	*/
 	disableDrag: function () {
 		this.unbind("MouseDown", this._ondown);
-		this.stopDrag();
+		if (this._dragging) {
+			this.stopDrag();
+		}
 		return this;
 	}
 });
@@ -6681,9 +6998,9 @@ Crafty.c("Twoway", {
 	/**@
 	* #.twoway
 	* @comp Twoway
-	* @sign public this .twoway(Number speed[, Number jumpSpeed])
+	* @sign public this .twoway(Number speed[, Number jump])
 	* @param speed - Amount of pixels to move left or right
-	* @param jumpSpeed - How high the entity should jump
+	* @param jump - Vertical jump speed
 	* 
 	* Constructor to initialize the speed and power of jump. Component will
 	* listen for key events and move the entity appropriately. This includes
@@ -6708,7 +7025,7 @@ Crafty.c("Twoway", {
 		});
 
 		if (speed) this._speed = speed;
-		jump = jump || this._speed * 2;
+		if (arguments.length<2) jump = this._speed * 2;	
 
 		this.bind("EnterFrame", function () {
 			if (this.disableControls) return;
@@ -6721,6 +7038,83 @@ Crafty.c("Twoway", {
 		});
 
 		return this;
+	}
+});
+
+
+Crafty.c("Animation", {
+	_reel: null,
+
+	init: function () {
+		this._reel = {};
+	},
+
+	addAnimation: function (label, skeleton) {
+		var key,
+			lastKey = 0,
+			i = 0, j,
+			frame,
+			prev,
+			prop,
+			diff = {},
+			p,
+			temp,
+			frames = [];
+
+		//loop over every frame
+		for (key in skeleton) {
+
+			frame = skeleton[key];
+			prev = skeleton[lastKey] || this;
+			diff = {};
+
+			//find the difference
+			for (prop in frame) {
+				if (typeof frame[prop] !== "number") {
+					diff[prop] = frame[prop];
+					continue;
+				}
+
+				diff[prop] = (frame[prop] - prev[prop]) / (key - lastKey);
+			}
+
+			for (i = +lastKey + 1, j = 1; i <= +key; ++i, ++j) {
+				temp = {};
+				for (p in diff) {
+					if (typeof diff[p] === "number") {
+						temp[p] = prev[p] + diff[p] * j;
+					} else {
+						temp[p] = diff[p];
+					}
+				}
+
+				frames[i] = temp;
+			}
+			lastKey = key;
+		}
+
+		this._reel[label] = frames;
+
+		return this;
+	},
+
+	playAnimation: function (label) {
+		var reel = this._reel[label],
+			i = 0,
+			l = reel.length,
+			prop;
+
+		this.bind("EnterFrame", function e() {
+			for (prop in reel[i]) {
+				this[prop] = reel[i][prop];
+			}
+			i++;
+
+			if (i > l) {
+				this.trigger("AnimationEnd");
+				this.unbind("EnterFrame", e);
+			}
+		});
 	}
 });
 
@@ -7060,6 +7454,7 @@ function tweenEnterFrame(e) {
 }
 
 
+
 /**@
 * #Color
 * @category Graphics
@@ -7122,7 +7517,7 @@ Crafty.c("Tint", {
 		var draw = function d(e) {
 			var context = e.ctx || Crafty.canvas.context;
 
-			context.fillStyle = this._color || "rgb(0,0,0)";
+			context.fillStyle = this._color || "rgba(0,0,0, 0)";
 			context.fillRect(e.pos._x, e.pos._y, e.pos._w, e.pos._h);
 		};
 
@@ -7261,7 +7656,7 @@ Crafty.c("Image", {
 });
 
 Crafty.extend({
-	_scenes: [],
+	_scenes: {},
 	_current: null,
 
 	/**@
@@ -7278,22 +7673,51 @@ Crafty.extend({
 	* Method to create scenes on the stage. Pass an ID and function to register a scene.
 	*
 	* To play a scene, just pass the ID. When a scene is played, all
-	* entities with the `2D` component on the stage are destroyed.
+	* previously-created entities with the `2D` component are destroyed. The
+	* viewport is also reset.
 	*
-	* If you want some entities to persist over scenes (as in not be destroyed)
+	* If you want some entities to persist over scenes (as in, not be destroyed)
 	* simply add the component `Persist`.
 	*
 	* @example
 	* ~~~
-	* Crafty.scene("loading", function() {});
+	* Crafty.scene("loading", function() {
+	*     Crafty.background("#000");
+	*     Crafty.e("2D, DOM, Text")
+	*           .attr({ w: 100, h: 20, x: 150, y: 120 })
+	*           .text("Loading")
+	*           .css({ "text-align": "center"})
+    *           .textColor("#FFFFFF");
+	* });
 	*
-	* Crafty.scene("loading", function() {}, function() {});
-	*
+	* Crafty.scene("UFO_dance",
+	*              function() {Crafty.background("#444"); Crafty.e("UFO");},
+	*              function() {...send message to server...});
+	* ~~~
+	* This defines (but does not play) two scenes as discussed below.
+	* ~~~
 	* Crafty.scene("loading");
 	* ~~~
+	* This command will clear the stage by destroying all `2D` entities (except
+	* those with the `Persist` component). Then it will set the background to
+	* black and display the text "Loading".
+	* ~~~
+	* Crafty.scene("UFO_dance");
+	* ~~~
+	* This command will clear the stage by destroying all `2D` entities (except
+	* those with the `Persist` component). Then it will set the background to
+	* gray and create a UFO entity. Finally, the next time the game encounters
+	* another command of the form `Crafty.scene(scene_name)` (if ever), then the
+	* game will send a message to the server.
 	*/
 	scene: function (name, intro, outro) {
-		//play scene
+		// ---FYI---
+		// this._current is the name (ID) of the scene in progress.
+		// this._scenes is an object like the following:
+		// {'Opening scene': {'initialize': fnA, 'uninitialize': fnB},
+		//  'Another scene': {'initialize': fnC, 'uninitialize': fnD}}
+		
+		// If there's one argument, play the scene
 		if (arguments.length === 1) {
 			Crafty.viewport.reset();
 			Crafty("2D").each(function () {
@@ -7310,9 +7734,10 @@ Crafty.extend({
 			Crafty.trigger("SceneChange", { oldScene: oldScene, newScene: name });
 			return;
 		}
-		//add scene
-		this._scenes[name] = {}
-		this._scenes[name].initialize = intro
+		
+		// If there is more than one argument, add the scene information to _scenes
+		this._scenes[name] = {};
+		this._scenes[name].initialize = intro;
 		if (typeof outro !== 'undefined') {
 			this._scenes[name].uninitialize = outro;
 		}
@@ -7360,10 +7785,86 @@ Crafty.extend({
 * the best method of drawing in both DOM and canvas
 */
 Crafty.DrawManager = (function () {
+	/** Helper function to sort by globalZ */
+	function zsort(a, b) { return a._globalZ - b._globalZ; };
 	/** array of dirty rects on screen */
-	var dirty_rects = [],
+	var dirty_rects = [], changed_objs = [], 
 	/** array of DOMs needed updating */
-		dom = [];
+		dom = [], 
+	
+	/** recManager: an object for managing dirty rectangles. */
+	rectManager = {
+		/** Finds smallest rectangles that overlaps a and b, merges them into target */
+		merge: function(a, b, target){
+			if (target == null)
+				target={}
+			// Doing it in this order means we can use either a or b as the target, with no conflict
+			// Round resulting values to integers; down for xy, up for wh
+			// Would be slightly off if negative w, h were allowed
+			target._h = Math.max(a._y + a._h, b._y + b._h);
+			target._w = Math.max(a._x + a._w, b._x + b._w);
+			target._x = ~~Math.min(a._x, b._x);
+			target._y = ~~Math.min(a._y, b._y);
+			target._w -= target._x;
+			target._h -= target._y
+			target._w = (target._w == ~~target._w) ? target._w : ~~target._w + 1 | 0;
+			target._h = (target._h == ~~target._h) ? target._h : ~~target._h + 1 | 0;
+			return target
+		},
+
+		/** cleans up current dirty state, stores stale state for future passes */
+		clean: function(){
+			var rect, obj, i;
+            for (i=0, l=changed_objs.length; i<l; i++){
+            	obj = changed_objs[i];
+            	rect = obj._mbr || obj;
+            	if (obj.staleRect == null)
+            			obj.staleRect = {}
+        		obj.staleRect._x = rect._x;
+				obj.staleRect._y = rect._y;
+				obj.staleRect._w = rect._w;
+				obj.staleRect._h = rect._h;
+
+				obj._changed = false
+            }
+            changed_objs.length = 0;
+            dirty_rects.length = 0
+
+		},
+
+		/** Takes the current and previous position of an object, and pushes the dirty regions onto the stack
+		* 	If the entity has only moved/changed a little bit, the regions are squashed together */
+		createDirty: function(obj){
+			var rect = obj._mbr || obj;
+			if (obj.staleRect){
+				//If overlap, merge stale and current position together, then return
+				//Otherwise just push stale rectangle
+				if (  rectManager.overlap( obj.staleRect, rect)){
+					rectManager.merge(obj.staleRect, rect, obj.staleRect)
+					dirty_rects.push(obj.staleRect)
+					return
+				}
+				else{
+					dirty_rects.push(obj.staleRect)
+				}
+			}
+
+			// We use the intermediate "currentRect" so it can be modified without messing with obj
+			obj.currentRect._x = rect._x;
+			obj.currentRect._y = rect._y;
+			obj.currentRect._w = rect._w;
+			obj.currentRect._h = rect._h;
+			dirty_rects.push(obj.currentRect)
+			
+		},
+
+		/** Checks whether two rectangles overlap */
+		overlap: function(a, b){
+			return (a._x < b._x + b._w && a._y < b._y + b._h 
+					&& a._x + a._w > b._x && a._y + a._h > b._y)
+		}
+
+	};
 
 	return {
 		/**@
@@ -7388,101 +7889,57 @@ Crafty.DrawManager = (function () {
 		},
 
 		/**@
-		* #Crafty.DrawManager.merge
+		* #Crafty.DrawManager.mergeSet
 		* @comp Crafty.DrawManager
-		* @sign public Object Crafty.DrawManager.merge(Object set)
+		* @sign public Object Crafty.DrawManager.mergeSet(Object set)
 		* @param set - an array of rectangular regions
 		* 
-		* Merged into non overlapping rectangular region
+		* Merge any consecutive, overlapping rects into each other.
 		* Its an optimization for the redraw regions.
+		*
+		* The order of set isn't strictly meaningful, 
+		* but overlapping objects will often cause each other to change, 
+		* and so might be consecutive.
 		*/
-		merge: function (set) {
-			do {
-				var newset = [], didMerge = false, i = 0,
-					l = set.length, current, next, merger;
-
-				while (i < l) {
-					current = set[i];
-					next = set[i + 1];
-
-					if (i < l - 1 && current._x < next._x + next._w && current._x + current._w > next._x &&
-									current._y < next._y + next._h && current._h + current._y > next._y) {
-
-						merger = {
-							_x: ~~Math.min(current._x, next._x),
-							_y: ~~Math.min(current._y, next._y),
-							_w: Math.max(current._x, next._x) + Math.max(current._w, next._w),
-							_h: Math.max(current._y, next._y) + Math.max(current._h, next._h)
-						};
-						merger._w = merger._w - merger._x;
-						merger._h = merger._h - merger._y;
-						merger._w = (merger._w == ~~merger._w) ? merger._w : merger._w + 1 | 0;
-						merger._h = (merger._h == ~~merger._h) ? merger._h : merger._h + 1 | 0;
-
-						newset.push(merger);
-
-						i++;
-						didMerge = true;
-					} else newset.push(current);
+		mergeSet: function (set) {
+			var i = 0;
+			while (i < set.length-1) {
+				// If current and next overlap, merge them together into the first, removing the second
+				// Then skip the index backwards to compare the previous pair.
+				// Otherwise skip forward
+				if (rectManager.overlap(set[i], set[i+1])){
+					rectManager.merge(set[i], set[i+1], set[i]);
+					set.splice(i+1, 1);
+					if (i>0) i--
+				} else
 					i++;
-				}
-
-				set = newset.length ? Crafty.clone(newset) : set;
-
-				if (didMerge) i = 0;
-			} while (didMerge);
-
+			}
+		
 			return set;
 		},
 
 		/**@
-		* #Crafty.DrawManager.add
+		* #Crafty.DrawManager.addCanvas
 		* @comp Crafty.DrawManager
-		* @sign public Crafty.DrawManager.add(old, current)
-		* @param old - Undocumented
-		* @param current - Undocumented
+		* @sign public Crafty.DrawManager.addCanvas(ent)
+		* @param ent - The entity to add
 		* 
-		* Calculate the bounding rect of dirty data and add to the register of dirty rectangles
+		* Add an entity to the list of Canvas objects to draw
 		*/
-		add: function add(old, current) {
-			if (!current) {
-				dom.push(old);
-				return;
-			}
+		addCanvas: function addCanvas(ent){
+			changed_objs.push(ent)
+		},
 
-			var rect,
-				before = old._mbr || old,
-				after = current._mbr || current;
-
-			if (old === current) {
-				rect = old.mbr() || old.pos();
-			} else {
-				rect = {
-					_x: ~~Math.min(before._x, after._x),
-					_y: ~~Math.min(before._y, after._y),
-					_w: Math.max(before._w, after._w) + Math.max(before._x, after._x),
-					_h: Math.max(before._h, after._h) + Math.max(before._y, after._y)
-				};
-
-				rect._w = (rect._w - rect._x);
-				rect._h = (rect._h - rect._y);
-			}
-
-			if (rect._w === 0 || rect._h === 0 || !this.onScreen(rect)) {
-				return false;
-			}
-
-			//floor/ceil
-			rect._x = ~~rect._x;
-			rect._y = ~~rect._y;
-			rect._w = (rect._w === ~~rect._w) ? rect._w : rect._w + 1 | 0;
-			rect._h = (rect._h === ~~rect._h) ? rect._h : rect._h + 1 | 0;
-
-			//add to dirty_rects, check for merging
-			dirty_rects.push(rect);
-
-			//if it got merged
-			return true;
+		/**@
+		* #Crafty.DrawManager.addDom
+		* @comp Crafty.DrawManager
+		* @sign public Crafty.DrawManager.addDom(ent)
+		* @param ent - The entity to add
+		* 
+		* Add an entity to the list of DOM object to draw
+		*/
+		addDom: function addDom(ent) {
+				dom.push(ent);
 		},
 
 		/**@
@@ -7491,13 +7948,13 @@ Crafty.DrawManager = (function () {
 		* @sign public Crafty.DrawManager.debug()
 		*/
 		debug: function () {
-			console.log(dirty_rects, dom);
+			console.log(changed_objs, dom);
 		},
 
 		/**@
-		* #Crafty.DrawManager.draw
+		* #Crafty.DrawManager.drawAll
 		* @comp Crafty.DrawManager
-		* @sign public Crafty.DrawManager.draw([Object rect])
+		* @sign public Crafty.DrawManager.drawAll([Object rect])
         * @param rect - a rectangular region {_x: x_val, _y: y_val, _w: w_val, _h: h_val}
         * ~~~
 		* - If rect is omitted, redraw within the viewport
@@ -7515,7 +7972,7 @@ Crafty.DrawManager = (function () {
 			ctx.clearRect(rect._x, rect._y, rect._w, rect._h);
 
 			//sort the objects by the global Z
-			q.sort(function (a, b) { return a._globalZ - b._globalZ; });
+			q.sort(zsort);
 			for (; i < l; i++) {
 				current = q[i];
 				if (current._visible && current.__c.Canvas) {
@@ -7555,6 +8012,8 @@ Crafty.DrawManager = (function () {
 			return master;
 		},
 
+
+
 		/**@
 		* #Crafty.DrawManager.draw
 		* @comp Crafty.DrawManager
@@ -7568,11 +8027,11 @@ Crafty.DrawManager = (function () {
         * @see Canvas.draw, DOM.draw
 		*/
 		draw: function draw() {
-			//if nothing in dirty_rects, stop
-			if (!dirty_rects.length && !dom.length) return;
+			//if no objects have been changed, stop
+			if (!changed_objs.length && !dom.length) return;
 
-			var i = 0, l = dirty_rects.length, k = dom.length, rect, q,
-				j, len, dupes, obj, ent, objs = [], ctx = Crafty.canvas.context;
+			var i = 0, l = changed_objs.length, k = dom.length, rect, q,
+				j, len, obj, ent, ctx = Crafty.canvas.context;
 
 			//loop over all DOM elements needing updating
 			for (; i < k; ++i) {
@@ -7580,85 +8039,91 @@ Crafty.DrawManager = (function () {
 			}
 			//reset DOM array
             dom.length = 0;
-			//again, stop if nothing in dirty_rects
+
+			//again, stop if no canvas components have changed
 			if (!l) { return; }
 
-			//if the amount of rects is over 60% of the total objects
+			//if the amount of changed objects is over 60% of the total objects
 			//do the naive method redrawing
-			if (l / this.total2D > 0.6) {
+			// TODO: I'm not sure this condition really makes that much sense!
+			if (l / this.total2D > 0.6 ) {
 				this.drawAll();
-				dirty_rects.length = 0;
+				rectManager.clean()
 				return;
 			}
 
-			dirty_rects = this.merge(dirty_rects);
+			// Calculate dirty_rects from all changed objects, then merge some overlapping regions together
+			for  (i=0; i<l; i++){
+				rectManager.createDirty(changed_objs[i])
+			}
+			dirty_rects = this.mergeSet(dirty_rects);
+
+			
+			l = dirty_rects.length;
+			var dupes = [], objs = []
+			// For each dirty rectangle, find entities near it, and draw the overlapping ones
 			for (i = 0; i < l; ++i) { //loop over every dirty rect
 				rect = dirty_rects[i];
+				dupes.length=0;
+				objs.length=0;
 				if (!rect) continue;
-				q = Crafty.map.search(rect, false); //search for ents under dirty rect
 
-				dupes = {};
-
-				//loop over found objects removing dupes and adding to obj array
-				for (j = 0, len = q.length; j < len; ++j) {
-					obj = q[j];
-
-					if (dupes[obj[0]] || !obj._visible || !obj.__c.Canvas)
-						continue;
-					dupes[obj[0]] = true;
-
-					objs.push({ obj: obj, rect: rect });
-				}
+				//search for ents under dirty rect
+				q = Crafty.map.search(rect, false); 
 
 				//clear the rect from the main canvas
 				ctx.clearRect(rect._x, rect._y, rect._w, rect._h);
 
-			}
-
-			//sort the objects by the global Z
-			objs.sort(function (a, b) { return a.obj._globalZ - b.obj._globalZ; });
-			if (!objs.length){ return; }
-
-			//loop over the objects
-			for (i = 0, l = objs.length; i < l; ++i) {
-				obj = objs[i];
-				rect = obj.rect;
-				ent = obj.obj;
-
-				var area = ent._mbr || ent,
-					x = (rect._x - area._x <= 0) ? 0 : ~~(rect._x - area._x),
-					y = (rect._y - area._y < 0) ? 0 : ~~(rect._y - area._y),
-					w = ~~Math.min(area._w - x, rect._w - (area._x - rect._x), rect._w, area._w),
-					h = ~~Math.min(area._h - y, rect._h - (area._y - rect._y), rect._h, area._h);
-
-				//no point drawing with no width or height
-				if (h === 0 || w === 0) continue;
-
+				//Then clip drawing region to dirty rectangle
 				ctx.save();
 				ctx.beginPath();
-				ctx.moveTo(rect._x, rect._y);
-				ctx.lineTo(rect._x + rect._w, rect._y);
-				ctx.lineTo(rect._x + rect._w, rect._h + rect._y);
-				ctx.lineTo(rect._x, rect._h + rect._y);
-				ctx.lineTo(rect._x, rect._y);
-
+				ctx.rect(rect._x, rect._y, rect._w, rect._h);
 				ctx.clip();
 
-				ent.draw();
+				// Loop over found objects removing dupes and adding visible canvas objects to array
+				for (j = 0, len = q.length; j < len; ++j) {
+					obj = q[j];
+      
+					if (dupes[obj[0]] || !obj._visible || !obj.__c.Canvas)
+						continue;
+					dupes[obj[0]] = true;
+					objs.push(obj);
+				}
+
+				// Sort objects by z level
+				objs.sort(zsort)
+				
+				// Then draw each object in that order
+				for (j = 0, len = objs.length; j < len; ++j) {
+					obj = objs[j]
+					var area = obj._mbr || obj;
+					if (rectManager.overlap(area, rect))
+						obj.draw()
+					obj._changed = false
+				}
+
+				
+				// Close rectangle clipping
 				ctx.closePath();
 				ctx.restore();
 
-				//allow entity to re-dirty_rects
-				ent._changed = false;
 			}
 
-			//empty dirty_rects
-			dirty_rects.length = 0;
-			//all merged IDs are now invalid
-			merged = {};
+			// Draw dirty rectangles for debugging, if that flag is set
+			if (Crafty.DrawManager.debugDirty === true){
+				ctx.strokeStyle = 'red';
+		        for (i = 0, l=dirty_rects.length; i < l; ++i) { 
+		            rect = dirty_rects[i];
+		            ctx.strokeRect(rect._x,rect._y,rect._w,rect._h)
+		        } 
+        	}
+            //Clean up lists etc
+            rectManager.clean()
+
 		}
 	};
 })();
+
 
 Crafty.extend({
 /**@
@@ -7836,161 +8301,6 @@ Crafty.extend({
                 }
             };
         } 
-    }
-});
-
-
-Crafty.extend({
-    /**@
-* #Crafty.diamondIso
-* @category 2D
-* Place entities in a 45deg diamond isometric fashion. It is similar to isometric but has another grid locations
-*/
-    diamondIso:{
-        _tile: {
-            width: 0,
-            height: 0,
-            r:0
-        },
-        _map:{
-            width:0,
-            height:0,
-            x:0,
-            y:0
-        },
-        
-        _origin:{
-            x:0,
-            y:0
-        },
-        /**@
-        * #Crafty.diamondIso.init
-        * @comp Crafty.diamondIso
-        * @sign public this Crafty.diamondIso.init(Number tileWidth,Number tileHeight,Number mapWidth,Number mapHeight)
-        * @param tileWidth - The size of base tile width in Pixel
-        * @param tileHeight - The size of base tile height in Pixel
-        * @param mapWidth - The width of whole map in Tiles
-        * @param mapHeight - The height of whole map in Tiles
-        * 
-        * Method used to initialize the size of the isometric placement.
-        * Recommended to use a size alues in the power of `2` (128, 64 or 32).
-        * This makes it easy to calculate positions and implement zooming.
-        * 
-        * @example
-        * ~~~
-        * var iso = Crafty.diamondIso.init(64,128,20,20);
-        * ~~~
-        * 
-        * @see Crafty.diamondIso.place
-        */
-        init:function(tw, th,mw,mh){
-            this._tile.width = parseInt(tw);
-            this._tile.height = parseInt(th)||parseInt(tw)/2;
-            this._tile.r = this._tile.width / this._tile.height;
-            
-            this._map.width = parseInt(mw);
-            this._map.height = parseInt(mh) || parseInt(mw);
-       
-            this._origin.x = this._map.height * this._tile.width / 2;
-            return this;
-        },
-   /**@
-        * #Crafty.diamondIso.place
-        * @comp Crafty.diamondIso
-        * @sign public this Crafty.diamondIso.place(Entity tile,Number x, Number y, Number layer)
-        * @param x - The `x` position to place the tile
-        * @param y - The `y` position to place the tile
-        * @param layer - The `z` position to place the tile (calculated by y position * layer)
-        * @param tile - The entity that should be position in the isometric fashion
-        * 
-        * Use this method to place an entity in an isometric grid.
-        * 
-        * @example
-        * ~~~
-        * var iso = Crafty.diamondIso.init(64,128,20,20);
-        * isos.place(Crafty.e('2D, DOM, Color').color('red').attr({w:128, h:128}),1,1,2);
-        * ~~~
-        * 
-        * @see Crafty.diamondIso.size
-        */
-        place:function(obj,x,y,layer){
-            var pos = this.pos2px(x,y);
-            if(!layer) layer = 1;
-            var marginX = 0,marginY = 0;
-            if(obj.__margin !== undefined){
-                marginX = obj.__margin[0];
-                marginY = obj.__margin[1];
-            }
-          
-            obj.x = pos.left+(marginX);
-            obj.y = (pos.top+marginY)-obj.h;
-            obj.z = (pos.top)*layer;
-           
-            
-        },
-        centerAt:function(x,y){
-            var pos = this.pos2px(x,y);
-            Crafty.viewport.x = -pos.left+Crafty.viewport.width/2-this._tile.width;
-            Crafty.viewport.y = -pos.top+Crafty.viewport.height/2;
-        
-        },
-        area:function(offset){
-            if(!offset) offset = 0;
-            //calculate the corners
-            var vp = Crafty.viewport.rect();
-            var ow = offset*this._tile.width;
-            var oh = offset*this._tile.height;
-            vp._x -= (this._tile.width/2+ow);
-            vp._y -= (this._tile.height/2+oh);
-            vp._w += (this._tile.width/2+ow);
-            vp._h += (this._tile.height/2+oh); 
-            /*  Crafty.viewport.x = -vp._x;
-            Crafty.viewport.y = -vp._y;    
-            Crafty.viewport.width = vp._w;
-            Crafty.viewport.height = vp._h;   */
-            
-            var grid = [];
-            for(var y = vp._y,yl = (vp._y+vp._h);y<yl;y+=this._tile.height/2){
-                for(var x = vp._x,xl = (vp._x+vp._w);x<xl;x+=this._tile.width/2){
-                    var row = this.px2pos(x,y);
-                    grid.push([~~row.x,~~row.y]);
-                }
-            }
-            return grid;       
-        },
-        pos2px:function(x,y){
-            return{
-                left:((x-y)*this._tile.width/2+this._origin.x),
-                top:((x+y)*this._tile.height/2)
-            }
-        },
-        px2pos:function(left,top){
-            var x = (left - this._origin.x)/this._tile.r;
-            return {
-                x:((top+x) / this._tile.height),
-                y:((top-x) / this._tile.height)
-            }
-        },
-        
-        polygon:function(obj){
-     
-            obj.requires("Collision");
-            var marginX = 0,marginY = 0;
-            if(obj.__margin !== undefined){
-                marginX = obj.__margin[0];
-                marginY = obj.__margin[1];
-            }
-            var points = [
-            [marginX-0,obj.h-marginY-this._tile.height/2],
-            [marginX-this._tile.width/2,obj.h-marginY-0],
-            [marginX-this._tile.width,obj.h-marginY-this._tile.height/2],
-            [marginX-this._tile.width/2,obj.h-marginY-this._tile.height]
-            ];
-            var poly = new Crafty.polygon(points);
-            return poly;
-           
-        }
-       
     }
 });
 
@@ -8355,328 +8665,460 @@ Crafty.c("Particles", {
 		}
 	}
 });
+
 Crafty.extend({
-/**@
-* #Crafty.audio
-* @category Audio
-* 
-* Add sound files and play them. Chooses best format for browser support.
-* Due to the nature of HTML5 audio, three types of audio files will be
-* required for cross-browser capabilities. These formats are MP3, Ogg and WAV.
-* When sound was not muted on before pause, sound will be unmuted after unpause.
-* When sound is muted Crafty.pause() does not have any effect on sound.
-*/
-    audio:{
-        sounds:{},
-        supported:{},
-        codecs :{ // Chart from jPlayer
-            ogg:  'audio/ogg; codecs="vorbis"', //OGG
-            wav: 'audio/wav; codecs="1"', // PCM
-            webma:  'audio/webm; codecs="vorbis"',// WEBM
-            mp3:  'audio/mpeg; codecs="mp3"', //MP3
-            m4a: 'audio/mp4; codecs="mp4a.40.2"'// AAC / MP4
-        },
-        volume:1, //Global Volume
-        muted:false,
-        /**
-         * Function to setup supported formats
-         **/
-        canPlay:function(){
-            var audio = this.audioElement(),canplay;
-            for(var i in this.codecs){
-                canplay = audio.canPlayType(this.codecs[i]);
-                if(canplay !== "" && canplay !== "no"){
-                    this.supported[i] = true;
-                }else{
-                    this.supported[i] = false;
-                }
-            }
-          
-        },
-        /**
-         * Function to get an Audio Element
-         **/
-        audioElement:function(){
-            //IE does not support Audio Object
-            return typeof Audio !== 'undefined' ? new Audio("") : document.createElement('audio');
-        },
-        /**@
-        * #Crafty.audio.add
-        * @comp Crafty.audio
-        * @sign public this Crafty.audio.add(String id, String url)
-        * @param id - A string to refer to sounds
-        * @param url - A string pointing to the sound file
-        * @sign public this Crafty.audio.add(String id, Array urls)
-        * @param urls - Array of urls pointing to different format of the same sound, selecting the first that is playable
-        * @sign public this Crafty.audio.add(Object map)
-        * @param map - key-value pairs where the key is the `id` and the value is either a `url` or `urls`
-        *
-        * Loads a sound to be played. Due to the nature of HTML5 audio,
-        * three types of audio files will be required for cross-browser capabilities.
-        * These formats are MP3, Ogg and WAV.
-        *
-        * Passing an array of URLs will determine which format the browser can play and select it over any other.
-        *
-        * Accepts an object where the key is the audio name and
-        * either a URL or an Array of URLs (to determine which type to use).
-        *
-        * The ID you use will be how you refer to that sound when using `Crafty.audio.play`.
-        *
-        * @example
-        * ~~~
-        * //adding audio from an object
-        * Crafty.audio.add({
-        * shoot: ["sounds/shoot.wav",
-        * "sounds/shoot.mp3",
-        * "sounds/shoot.ogg"],
-        *
-        * coin: "sounds/coin.mp3"
-        * });
-        *
-        * //adding a single sound
-        * Crafty.audio.add("walk", [
-        * "sounds/walk.mp3",
-        * "sounds/walk.ogg",
-        * "sounds/walk.wav"
-        * ]);
-        *
-        * //only one format
-        * Crafty.audio.add("jump", "sounds/jump.mp3");
-        * ~~~
-        */
-        add:function(id,url){
-            Crafty.support.audio = !!this.audioElement().canPlayType; //Setup audio support
-            if (!Crafty.support.audio) return;
-            
-            this.canPlay(); //Setup supported Extensions
-            
-            var audio,ext,path;
-            if(arguments.length === 1 && typeof id === "object"){
-                for(var i in id){
-                    for(var src in id[i]){
-                        audio = this.audioElement();
-                        audio.id = i;
-                        audio.preload = "auto";
-                        audio.volume = Crafty.audio.volume;
-                        path = id[i][src];
-                        ext = path.substr(path.lastIndexOf('.') + 1).toLowerCase();
-                        if(this.supported[ext]){
-                            audio.src = path;
-                            Crafty.asset(path, audio); 
-                            this.sounds[i] = {
-                                obj:audio,
-                                played:0,
-                                volume:Crafty.audio.volume
-                            } 
-                        }
-                        
-                    }
-                }          
-            }
-            if(typeof id === "string"){
-                audio = this.audioElement();
-                audio.id = id;
-                audio.preload = "auto";
-                audio.volume = Crafty.audio.volume;
-              
-                if(typeof url === "string"){
-                    ext = url.substr(url.lastIndexOf('.') + 1).toLowerCase();
-                    if(this.supported[ext]){
-                        audio.src = url;
-                        Crafty.asset(url, audio);  
-                        this.sounds[id] = {
-                            obj:audio,
-                            played:0,
-                            volume:Crafty.audio.volume
-                        } 
-                       
-                    }
-                  
-                }
-             
-                if(typeof url === "object"){
-                    for(src in url){   
-                        audio = this.audioElement();
-                        audio.id = id;
-                        audio.preload = "auto";
-                        audio.volume = Crafty.audio.volume;
-                        path = url[src];
-                        ext = path.substr(path.lastIndexOf('.') + 1).toLowerCase();	
-                        if(this.supported[ext]){
-                            audio.src = path;
-                            Crafty.asset(path, audio);   
-                            this.sounds[id] = {
-                                obj:audio,
-                                played:0,
-                                volume:Crafty.audio.volume
-                            } 
-                        }
-                       
-                    }
-                }
-               
-               
-            }
-          
+	/**@
+	 * #Crafty.audio
+	 * @category Audio
+	 *
+	 * Add sound files and play them. Chooses best format for browser support.
+	 * Due to the nature of HTML5 audio, three types of audio files will be
+	 * required for cross-browser capabilities. These formats are MP3, Ogg and WAV.
+	 * When sound was not muted on before pause, sound will be unmuted after unpause.
+	 * When sound is muted Crafty.pause() does not have any effect on sound.
+	 */
+	audio : {
+		sounds : {},
+		supported : {},
+		codecs : {// Chart from jPlayer
+			ogg : 'audio/ogg; codecs="vorbis"', //OGG
+			wav : 'audio/wav; codecs="1"', // PCM
+			webma : 'audio/webm; codecs="vorbis"', // WEBM
+			mp3 : 'audio/mpeg; codecs="mp3"', //MP3
+			m4a : 'audio/mp4; codecs="mp4a.40.2"'// AAC / MP4
+		},
+		volume : 1, //Global Volume
+		muted : false,
+		paused : false,
+		/**
+		 * Function to setup supported formats
+		 **/
+		canPlay : function() {
+			var audio = this.audioElement(), canplay;
+			for (var i in this.codecs) {
+				canplay = audio.canPlayType(this.codecs[i]);
+				if (canplay !== "" && canplay !== "no") {
+					this.supported[i] = true;
+				} else {
+					this.supported[i] = false;
+				}
+			}
 
-        },
-        /**@
-        * #Crafty.audio.play
-        * @comp Crafty.audio
-        * @sign public this Crafty.audio.play(String id)
-        * @sign public this Crafty.audio.play(String id, Number repeatCount)
-        * @sign public this Crafty.audio.play(String id, Number repeatCount,Number volume)
-        * @param id - A string to refer to sounds
-        * @param repeatCount - Repeat count for the file, where -1 stands for repeat forever.
-        * @param volume - volume can be a number between 0.0 and 1.0
-        * 
-        * Will play a sound previously added by using the ID that was used in `Crafty.audio.add`.
-        * Has a default maximum of 5 channels so that the same sound can play simultaneously unless all of the channels are playing.
+		},
+		/**
+		 * Function to get an Audio Element
+		 **/
+		audioElement : function() {
+			//IE does not support Audio Object
+			return typeof Audio !== 'undefined' ? new Audio("") : document.createElement('audio');
+		},
+		/**@
+		 * #Crafty.audio.add
+		 * @comp Crafty.audio
+		 * @sign public this Crafty.audio.add(String id, String url)
+		 * @param id - A string to refer to sounds
+		 * @param url - A string pointing to the sound file
+		 * @sign public this Crafty.audio.add(String id, Array urls)
+		 * @param urls - Array of urls pointing to different format of the same sound, selecting the first that is playable
+		 * @sign public this Crafty.audio.add(Object map)
+		 * @param map - key-value pairs where the key is the `id` and the value is either a `url` or `urls`
+		 *
+		 * Loads a sound to be played. Due to the nature of HTML5 audio,
+		 * three types of audio files will be required for cross-browser capabilities.
+		 * These formats are MP3, Ogg and WAV.
+		 *
+		 * Passing an array of URLs will determine which format the browser can play and select it over any other.
+		 *
+		 * Accepts an object where the key is the audio name and
+		 * either a URL or an Array of URLs (to determine which type to use).
+		 *
+		 * The ID you use will be how you refer to that sound when using `Crafty.audio.play`.
+		 *
+		 * @example
+		 * ~~~
+		 * //adding audio from an object
+		 * Crafty.audio.add({
+		 * shoot: ["sounds/shoot.wav",
+		 * "sounds/shoot.mp3",
+		 * "sounds/shoot.ogg"],
+		 *
+		 * coin: "sounds/coin.mp3"
+		 * });
+		 *
+		 * //adding a single sound
+		 * Crafty.audio.add("walk", [
+		 * "sounds/walk.mp3",
+		 * "sounds/walk.ogg",
+		 * "sounds/walk.wav"
+		 * ]);
+		 *
+		 * //only one format
+		 * Crafty.audio.add("jump", "sounds/jump.mp3");
+		 * ~~~
+		 */
+		add : function(id, url) {
+			Crafty.support.audio = !!this.audioElement().canPlayType;
+			//Setup audio support
+			if (!Crafty.support.audio)
+				return;
 
-        * *Note that the implementation of HTML5 Audio is buggy at best.*
-        *
-        * @example
-        * ~~~
-        * Crafty.audio.play("walk");
-        *
-        * //play and repeat forever
-        * Crafty.audio.play("backgroundMusic", -1);
-        * Crafty.audio.play("explosion",1,0.5); //play sound once with volume of 50%
-        * ~~~
-        */
-        play:function(id,repeat,volume){
-            if(repeat == 0 || !Crafty.support.audio || !this.sounds[id]) return;
-            var s = this.sounds[id];
-            s.volume = s.obj.volume = volume || Crafty.audio.volume ;   
-            if(s.obj.currentTime) s.obj.currentTime = 0;   
-            if(this.muted) s.obj.volume = 0;
-            s.obj.play(); 
-            s.played ++;
-            s.obj.addEventListener("ended", function(){
-                if(s.played < repeat || repeat == -1){
-                    if(this.currentTime) this.currentTime = 0;
-                    this.play();
-                    s.played ++;
-                }
-            },true);    
-        },
-        /**@
-        * #Crafty.audio.stop
-        * @sign public this Crafty.audio.stop([Number ID])
-        * 
-        * Stops any playing sound. if id is not set, stop all sounds which are playing
-        * 
-        * @example
-        * ~~~
-        * //all sounds stopped playing now
-        * Crafty.audio.stop();
-        *
-        * ~~~
-        */
-        stop:function(id){
-            if(!Crafty.support.audio) return;
-            var s;
-            if(!id){
-                for(var i in this.sounds){
-                    s = this.sounds[i];
-                    if(!s.obj.paused) s.obj.pause();
-                }
-            }
-            if(!this.sounds[id]) return;    
-            s = this.sounds[id];
-            if(!s.obj.paused) s.obj.pause();
-        },
-        /**
-        * #Crafty.audio._mute
-        * @sign public this Crafty.audio._mute([Boolean mute])
-        * 
-        * Mute or unmute every Audio instance that is playing.
-        */
-        _mute:function(mute){
-            if(!Crafty.support.audio) return;
-            var s;
-            for(var i in this.sounds){
-                s = this.sounds[i];
-                s.obj.volume = mute ? 0 : s.volume;
-            }
-            this.muted = mute;
-        },
-        /**@
-        * #Crafty.audio.toggleMute
-        * @sign public this Crafty.audio.toggleMute()
-        * 
-        * Mute or unmute every Audio instance that is playing. Toggles between
-        * pausing or playing depending on the state.
-        * 
-        * @example
-        * ~~~
-        * //toggle mute and unmute depending on current state
-        * Crafty.audio.toggleMute();
-        * ~~~
-        */
-        toggleMute:function(){
-            if (!this.muted) {
-                this._mute(true);
-            } else {
-                this._mute(false);
-            }
+			this.canPlay();
+			//Setup supported Extensions
 
-        },
-        /**@
-        * #Crafty.audio.mute
-        * @sign public this Crafty.audio.mute()
-        * 
-        * Mute every Audio instance that is playing.
-        *
-        * @example
-        * ~~~
-        * Crafty.audio.mute();
-        * ~~~
-        */
-        mute:function(){
-            this._mute(true);
-        },
-        /**@
-        * #Crafty.audio.unmute
-        * @sign public this Crafty.audio.unmute()
-        * 
-        * Unmute every Audio instance that is playing. 
-        * 
-        * @example
-        * ~~~
-        * Crafty.audio.unmute();
-        * ~~~
-        */
-        unmute:function(){
-            this._mute(false);
-        }
+			var audio, ext, path;
+			if (arguments.length === 1 && typeof id === "object") {
+				for (var i in id) {
+					for (var src in id[i]) {
+						audio = this.audioElement();
+						audio.id = i;
+						audio.preload = "auto";
+						audio.volume = Crafty.audio.volume;
+						path = id[i][src];
+						ext = path.substr(path.lastIndexOf('.') + 1).toLowerCase();
+						if (this.supported[ext]) {
+							audio.src = path;
+							Crafty.asset(path, audio);
+							this.sounds[i] = {
+								obj : audio,
+								played : 0,
+								volume : Crafty.audio.volume
+							}
+						}
 
-    } 
+					}
+				}
+			}
+			if ( typeof id === "string") {
+				audio = this.audioElement();
+				audio.id = id;
+				audio.preload = "auto";
+				audio.volume = Crafty.audio.volume;
+
+				if ( typeof url === "string") {
+					ext = url.substr(url.lastIndexOf('.') + 1).toLowerCase();
+					if (this.supported[ext]) {
+						audio.src = url;
+						Crafty.asset(url, audio);
+						this.sounds[id] = {
+							obj : audio,
+							played : 0,
+							volume : Crafty.audio.volume
+						}
+
+					}
+
+				}
+
+				if ( typeof url === "object") {
+					for (src in url) {
+						audio = this.audioElement();
+						audio.id = id;
+						audio.preload = "auto";
+						audio.volume = Crafty.audio.volume;
+						path = url[src];
+						ext = path.substr(path.lastIndexOf('.') + 1).toLowerCase();
+						if (this.supported[ext]) {
+							audio.src = path;
+							Crafty.asset(path, audio);
+							this.sounds[id] = {
+								obj : audio,
+								played : 0,
+								volume : Crafty.audio.volume
+							}
+						}
+
+					}
+				}
+
+			}
+
+		},
+		/**@
+		 * #Crafty.audio.play
+		 * @comp Crafty.audio
+		 * @sign public this Crafty.audio.play(String id)
+		 * @sign public this Crafty.audio.play(String id, Number repeatCount)
+		 * @sign public this Crafty.audio.play(String id, Number repeatCount,Number volume)
+		 * @param id - A string to refer to sounds
+		 * @param repeatCount - Repeat count for the file, where -1 stands for repeat forever.
+		 * @param volume - volume can be a number between 0.0 and 1.0
+		 *
+		 * Will play a sound previously added by using the ID that was used in `Crafty.audio.add`.
+		 * Has a default maximum of 5 channels so that the same sound can play simultaneously unless all of the channels are playing.
+
+		 * *Note that the implementation of HTML5 Audio is buggy at best.*
+		 *
+		 * @example
+		 * ~~~
+		 * Crafty.audio.play("walk");
+		 *
+		 * //play and repeat forever
+		 * Crafty.audio.play("backgroundMusic", -1);
+		 * Crafty.audio.play("explosion",1,0.5); //play sound once with volume of 50%
+		 * ~~~
+		 */
+		play : function(id, repeat, volume) {
+			if (repeat == 0 || !Crafty.support.audio || !this.sounds[id])
+				return;
+			var s = this.sounds[id];
+			s.volume = s.obj.volume = volume || Crafty.audio.volume;
+			if (s.obj.currentTime)
+				s.obj.currentTime = 0;
+			if (this.muted)
+				s.obj.volume = 0;
+			s.obj.play();
+			s.played++;
+			s.obj.addEventListener("ended", function() {
+				if (s.played < repeat || repeat == -1) {
+					if (this.currentTime)
+						this.currentTime = 0;
+					this.play();
+					s.played++;
+				}
+			}, true);
+		},
+	    /**@
+		 * #Crafty.audio.remove
+		 * @comp Crafty.audio
+		 * @sign public this Crafty.audio.remove([String id])
+		 * @param id - A string to refer to sounds
+		 *
+		 * Will stop the sound and remove all references to the audio object allowing the browser to free the memory.
+         * If no id is given, all sounds will be removed.
+		 *
+		 * @example
+		 * ~~~
+		 * Crafty.audio.remove("walk");
+		 * ~~~
+		 */
+		remove: function (id) {
+		    if (!Crafty.support.audio)
+		        return;
+
+		    var s;
+
+		    if (!id) {
+		        for (var i in this.sounds) {
+		            s = this.sounds[i];
+		            Crafty.audio.stop(id);
+		            delete Crafty.assets[s.obj.src];
+		            delete Crafty.audio.sounds[id];
+		        }
+		        return;
+		    }
+		    if (!this.sounds[id])
+		        return;
+
+		    s = this.sounds[id];
+		    Crafty.audio.stop(id);
+		    delete Crafty.assets[s.obj.src];
+		    delete Crafty.audio.sounds[id];
+		},
+		/**@
+		 * #Crafty.audio.stop
+		 * @sign public this Crafty.audio.stop([Number ID])
+		 *
+		 * Stops any playing sound. if id is not set, stop all sounds which are playing
+		 *
+		 * @example
+		 * ~~~
+		 * //all sounds stopped playing now
+		 * Crafty.audio.stop();
+		 *
+		 * ~~~
+		 */
+		stop : function(id) {
+			if (!Crafty.support.audio)
+				return;
+			var s;
+			if (!id) {
+				for (var i in this.sounds) {
+					s = this.sounds[i];
+					if (!s.obj.paused)
+						s.obj.pause();
+				}
+			}
+			if (!this.sounds[id])
+				return;
+			s = this.sounds[id];
+			if (!s.obj.paused)
+				s.obj.pause();
+		},
+		/**
+		 * #Crafty.audio._mute
+		 * @sign public this Crafty.audio._mute([Boolean mute])
+		 *
+		 * Mute or unmute every Audio instance that is playing.
+		 */
+		_mute : function(mute) {
+			if (!Crafty.support.audio)
+				return;
+			var s;
+			for (var i in this.sounds) {
+				s = this.sounds[i];
+				s.obj.volume = mute ? 0 : s.volume;
+			}
+			this.muted = mute;
+		},
+		/**@
+		 * #Crafty.audio.toggleMute
+		 * @sign public this Crafty.audio.toggleMute()
+		 *
+		 * Mute or unmute every Audio instance that is playing. Toggles between
+		 * pausing or playing depending on the state.
+		 *
+		 * @example
+		 * ~~~
+		 * //toggle mute and unmute depending on current state
+		 * Crafty.audio.toggleMute();
+		 * ~~~
+		 */
+		toggleMute : function() {
+			if (!this.muted) {
+				this._mute(true);
+			} else {
+				this._mute(false);
+			}
+
+		},
+		/**@
+		 * #Crafty.audio.mute
+		 * @sign public this Crafty.audio.mute()
+		 *
+		 * Mute every Audio instance that is playing.
+		 *
+		 * @example
+		 * ~~~
+		 * Crafty.audio.mute();
+		 * ~~~
+		 */
+		mute : function() {
+			this._mute(true);
+		},
+		/**@
+		 * #Crafty.audio.unmute
+		 * @sign public this Crafty.audio.unmute()
+		 *
+		 * Unmute every Audio instance that is playing.
+		 *
+		 * @example
+		 * ~~~
+		 * Crafty.audio.unmute();
+		 * ~~~
+		 */
+		unmute : function() {
+			this._mute(false);
+		},
+
+		/**@
+		 * #Crafty.audio.pause
+		 * @sign public this Crafty.audio.pause(string ID)
+		 *
+		 * Pause the Audio instance specified by id param.
+		 *
+		 * @example
+		 * ~~~
+		 * Crafty.audio.pause('music');
+		 * ~~~
+		 *
+		 * @param {string} id The id of the audio object to pause
+		 */
+		pause : function(id) {
+			if (!Crafty.support.audio || !id || !this.sounds[id])
+				return;
+			var s = this.sounds[id];
+			if (!s.obj.paused)
+				s.obj.pause();
+		},
+
+		/**@
+		 * #Crafty.audio.unpause
+		 * @sign public this Crafty.audio.unpause(string ID)
+		 *
+		 * Resume playing the Audio instance specified by id param.
+		 *
+		 * @example
+		 * ~~~
+		 * Crafty.audio.unpause('music');
+		 * ~~~
+		 *
+		 * @param {string} id The id of the audio object to unpause
+		 */
+		unpause : function(id) {
+			if (!Crafty.support.audio || !id || !this.sounds[id])
+				return;
+			var s = this.sounds[id];
+			if (s.obj.paused)
+				s.obj.play();
+		},
+
+		/**@
+		 * #Crafty.audio.togglePause
+		 * @sign public this Crafty.audio.togglePause(string ID)
+		 *
+		 * Toggle the pause status of the Audio instance specified by id param.
+		 *
+		 * @example
+		 * ~~~
+		 * Crafty.audio.togglePause('music');
+		 * ~~~
+		 *
+		 * @param {string} id The id of the audio object to pause/unpause
+		 */
+		togglePause : function(id) {
+			if (!Crafty.support.audio || !id || !this.sounds[id])
+				return;
+			var s = this.sounds[id];
+			if (s.obj.paused) {
+				s.obj.play();
+			} else {
+				s.obj.pause();
+			}
+		}
+	}
 });
+
 
 /**@
 * #Text
 * @category Graphics
 * @trigger Change - when the text is changed
 * @requires Canvas or DOM
-* Component to draw text inside the body of an entity.
+* Component to make a text entity.
+*
+* By default, text will have the style "10px sans-serif".
+* 
+* Note 1: An entity with the text component is just text! If you want to write text
+* inside an image, you need one entity for the text and another entity for the image.
+* More tips for writing text inside an image: (1) Use the z-index (from 2D component)
+* to ensure that the text is on top of the image, not the other way around; (2)
+* use .attach() (from 2D component) to glue the text to the image so they move and
+* rotate together.
+* 
+* Note 2: For DOM (but not canvas) text entities, various font settings (like
+* text-decoration and text-align) can be set using `.css()` (see DOM component). But
+* you cannot use `.css()` to set the properties which are controlled by `.textFont()`
+* or `.textColor()` -- the settings will be ignored.
 */
 Crafty.c("Text", {
 	_text: "",
-	_textFont: {
-		"type": "",
-		"weight": "",
-		"size": "",
-		"family": ""
-	},
+	defaultSize: "10px",
+	defaultFamily: "sans-serif",
 	ready: true,
 
 	init: function () {
 		this.requires("2D");
+		this._textFont = {
+			"type": "",
+			"weight": "",
+			"size": "",
+			"family": ""
+		};
 
 		this.bind("Draw", function (e) {
-			var font = this._textFont["type"] + ' ' + this._textFont["weight"] + ' ' +
-				this._textFont["size"] + ' ' + this._textFont["family"];
+			var font = this._textFont["type"] + ' ' + this._textFont["weight"] + ' '
+			 	+ (this._textFont["size"] || this.defaultSize) + ' ' 
+				+ (this._textFont["family"] || this.defaultFamily);
 
 			if (e.type === "DOM") {
 				var el = this._element,
@@ -8713,7 +9155,6 @@ Crafty.c("Text", {
     * @param text - String of text that will be inserted into the DOM or Canvas element.
     * 
     * This method will update the text inside the entity.
-    * If you use DOM, to modify the font, use the `.css` method inherited from the DOM component.
     *
     * If you need to reference attributes on the entity itself you can pass a function instead of a string.
     * 
@@ -8731,7 +9172,7 @@ Crafty.c("Text", {
     * ~~~
     */
 	text: function (text) {
-		if (!text) return this._text;
+		if (!(typeof text !== "undefined" && text !== null)) return this._text;
 		if (typeof(text) == "function")
 			this._text = text.call(this);
 		else
@@ -8806,8 +9247,38 @@ Crafty.c("Text", {
 
 		this.trigger("Change");
 		return this;
+	},
+	/**@
+    * #.unselectable
+    * @comp Text
+    * @triggers Change
+    * @sign public this .unselectable()
+    *
+    * This method sets the text so that it cannot be selected (highlighted) by dragging.
+    * (Canvas text can never be highlighted, so this only matters for DOM text.)
+    * Works by changing the css property "user-select" and its variants.
+    * 
+    * @example
+    * ~~~
+    * Crafty.e("2D, DOM, Text").text('This text cannot be highlighted!').unselectable();
+    * ~~~
+    */
+	unselectable: function () {
+		// http://stackoverflow.com/questions/826782/css-rule-to-disable-text-selection-highlighting
+		if (this.has("DOM")) {
+			this.css({'-webkit-touch-callout': 'none',
+				'-webkit-user-select': 'none',
+				'-khtml-user-select': 'none',
+				'-moz-user-select': 'none',
+				'-ms-user-select': 'none',
+				'user-select': 'none'});
+			this.trigger("Change");
+		}
+		return this;
 	}
+
 });
+
 
 Crafty.extend({
 /**@
@@ -8858,7 +9329,37 @@ Crafty.extend({
             this.trigger("NewAsset", {key : key, value : value});
         }
     },
-
+        /**@
+	* #Crafty.image_whitelist
+	* @category Assets
+	* 
+    * 
+    * A list of file extensions that can be loaded as images by Crafty.load
+    *
+	* @example
+	* ~~~
+        * Crafty.image_whitelist.push("tif")
+	* Crafty.load(["images/sprite.tif", "sounds/jump.mp3"],
+	*     function() {
+	*         //when loaded
+	*         Crafty.scene("main"); //go to main scene
+	*         Crafty.audio.play("jump.mp3"); //Play the audio file
+	*     },
+	*
+	*     function(e) {
+	*       //progress
+	*     },
+	*
+	*     function(e) {
+	*       //uh oh, error loading
+	*     }
+	* );
+	* ~~~
+	* 
+	* @see Crafty.asset
+        * @see Crafty.load
+	*/
+    image_whitelist: ["jpg", "jpeg", "gif", "png", "svg"],
 	/**@
 	* #Crafty.loader
 	* @category Assets
@@ -8871,7 +9372,7 @@ Crafty.extend({
 	* Preloader for all assets. Takes an array of URLs and
 	* adds them to the `Crafty.assets` object.
 	*
-	* Files with suffixes `jpg`, `jpeg`, `gif` and `png` (case insensitive) will be loaded.
+	* Files with suffixes in `image_whitelist` (case insensitive) will be loaded.
 	*
 	* If `Crafty.support.audio` is `true`, files with the following suffixes `mp3`, `wav`, `ogg` and `mp4` (case insensitive) can be loaded.
 	*
@@ -8906,6 +9407,7 @@ Crafty.extend({
 	* ~~~
 	* 
 	* @see Crafty.assets
+        * @see Crafty.image_whitelist
 	*/
     load: function (data, oncomplete, onprogress, onerror) {
             
@@ -8949,7 +9451,7 @@ Crafty.extend({
            
         for (; i < l; ++i) {       
             current = data[i];
-            ext = current.substr(current.lastIndexOf('.') + 1).toLowerCase();
+            ext = current.substr(current.lastIndexOf('.') + 1, 3).toLowerCase();
            
             obj = Crafty.asset(current) || null;   
           
@@ -8975,12 +9477,13 @@ Crafty.extend({
                 }
                    
                  
-            } else if (ext === "jpg" || ext === "jpeg" || ext === "gif" || ext === "png") { 
+            } else if (Crafty.image_whitelist.indexOf(ext) >= 0) { 
                 if(!obj) {
                     obj = new Image();
                     Crafty.asset(current, obj);   
                 }
                 obj.onload=pro;
+                obj.src = ""; // workaround for webkit bug
                 obj.src = current; //setup src after onload function Opera/IE Bug
              
             } else {
@@ -9174,6 +9677,7 @@ Crafty.extend({
 		});
 	}
 });
+
 
 /**@
 * #Crafty.math
@@ -10233,6 +10737,7 @@ Crafty.math.Matrix2D = (function () {
 	return Matrix2D;
 })();
 
+
 /**@
 * #Crafty Time
 * @category Utilities
@@ -10242,11 +10747,21 @@ Crafty.c("Delay", {
 		this._delays = [];
 		this.bind("EnterFrame", function() {
 			var now = new Date().getTime();
-			for(var index in this._delays) {
+			var index = this._delays.length;
+			while (--index >= 0) {
 				var item = this._delays[index];
-				if(!item.triggered && item.start + item.delay + item.pause < now) {
-					item.triggered=true;
+				if(item.start + item.delay + item.pause < now) {
 					item.func.call(this);
+					if (item.repeat > 0 ) {
+						// reschedule item
+						item.start = now;
+						item.pause = 0;
+						item.pauseBuffer = 0;
+						item.repeat--;
+					} else if (item.repeat <= 0) {
+						// remove item from array
+						this._delays.splice(index,1);
+					}
 				}
 			}
 		});
@@ -10264,12 +10779,15 @@ Crafty.c("Delay", {
 			}
 		});
 	},
-    /**@
+	/**@
 	* #.delay
 	* @comp Crafty Time
 	* @sign public this.delay(Function callback, Number delay)
 	* @param callback - Method to execute after given amount of milliseconds
 	* @param delay - Amount of milliseconds to execute the method
+	* @param repeat - How often to repeat the delayed function. A value of 0 triggers the delayed
+	* function exactly once. A value n > 0 triggers the delayed function exactly n+1 times. A
+	* value of -1 triggers the delayed function indefinitely.
 	* 
 	* The delay method will execute a function after a given amount of time in milliseconds.
 	* 
@@ -10283,20 +10801,22 @@ Crafty.c("Delay", {
 	* ~~~
 	* console.log("start");
 	* this.delay(function() {
-	     console.log("100ms later");
-	* }, 100);
+		 console.log("100ms later");
+	* }, 100, 0);
 	* ~~~
 	*/
-	delay : function(func, delay) {
-		return this._delays.push({
+	delay : function(func, delay, repeat) {
+		this._delays.push({
 			start : new Date().getTime(),
 			func : func,
 			delay : delay,
-			triggered : false,
+			repeat: ( repeat < 0 ? Infinity : repeat) || 0,
 			pauseBuffer: 0,
 			pause: 0
 		});
+		return this;
 	}
 });
+
 
 });
