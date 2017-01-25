@@ -137,6 +137,10 @@ var ball = Crafty.e('2D, DOM, Image, Collision')
       Crafty('PlayerPoints').each(function () {
         this.text(++this.points + ' Points')
       });
+      aiSpeed += 0.3;
+      Crafty('AISpeed').each(function () {
+        this.text("AI Speed: " + aiSpeed)
+      });
     }
 
     this.x += this.dX;
@@ -147,6 +151,10 @@ var ball = Crafty.e('2D, DOM, Image, Collision')
     createPowerUpFor(ai, 'AIPaddle');
   })
   .onHit('AIPaddle', function () {
+    aiSpeed -= 0.1;
+    Crafty('AISpeed').each(function () {
+        this.text("AI Speed: " + aiSpeed)
+      });
     this.dX *= -1;
     createPowerUpFor(player, 'PlayerPaddle');
   })
@@ -166,14 +174,20 @@ Crafty.e('PlayerPoints, DOM, 2D, Text')
 
 // PowerUp board
 Crafty.e('AIPowerUp, DOM, 2D, Text')
-  .attr({ x: 20, y: 45, w: 100, h: 20 })
+  .attr({ x: 20, y: 40, w: 100, h: 20 })
   .textColor('#FFFFFF', 0.8)
   .text('Power Up : None');
 Crafty.e('PlayerPowerUp, DOM, 2D, Text')
-  .attr({ x: 700, y: 45, w: 100, h: 20 })
+  .attr({ x: 700, y: 40, w: 100, h: 20 })
   .textColor('#FFFFFF', 0.8)
   .text('Power Up : None');
 
+
+// AI Speed board
+Crafty.e('AISpeed, DOM, 2D, Text')
+  .attr({ x: 20, y: 60, w: 200, h: 20 })
+  .textColor('#FFFFFF', 0.8)
+  .text('AI Speed: ' + aiSpeed);
 
 
 
