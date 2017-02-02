@@ -127,13 +127,21 @@ var ball = Crafty.e('2D, DOM, Image, Collision')
       this.dY *= -1;
 
     if (this.x > viewWidth - this.w) {
-      this.x = viewWidth / 2;
+      this.x = viewWidth / 2 - this.w / 2;
+      this.y = viewHeight / 2 - this.h / 2;
+      this.dY = Crafty.math.randomInt(-2, 2);
+      if(this.dY == 0)
+        this.dY = 1;
       Crafty('AIPoints').each(function () {
         this.text(++this.points + ' Points')
       });
     }
     if (this.x < this.w) {
-      this.x = viewWidth / 2;
+      this.x = viewWidth / 2 - this.w / 2;
+      this.y = viewHeight / 2 - this.h / 2;
+      this.dY = Crafty.math.randomInt(-2, 2);
+      if(this.dY == 0)
+        this.dY = 1;
       Crafty('PlayerPoints').each(function () {
         this.text(++this.points + ' Points')
       });
@@ -148,10 +156,12 @@ var ball = Crafty.e('2D, DOM, Image, Collision')
   })
   .onHit('PlayerPaddle', function () {
     this.dX *= -1;
+    this.dY += getYReflection(player);
     createPowerUpFor(ai, 'AIPaddle');
   })
   .onHit('AIPaddle', function () {
     aiSpeed -= 0.1;
+    this.dY += getYReflection(player);
     Crafty('AISpeed').each(function () {
         this.text("AI Speed: " + aiSpeed)
       });
@@ -188,6 +198,19 @@ Crafty.e('AISpeed, DOM, 2D, Text')
   .attr({ x: 20, y: 60, w: 200, h: 20 })
   .textColor('#FFFFFF', 0.8)
   .text('AI Speed: ' + aiSpeed);
+
+
+
+
+function getYReflection(paddle){
+
+  var middleOfBall = ball.y + ball.h/2;
+  var middleOfPaddle = paddle.y + paddle.h/2;
+  var distance = middleOfPaddle - middleOfBall;
+  var dY = (distance * 1.5) / (paddle.h / 2);
+  dY *= -1; 
+  return dY;
+}
 
 
 
