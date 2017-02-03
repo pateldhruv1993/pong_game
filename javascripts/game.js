@@ -161,7 +161,7 @@ var ball = Crafty.e('2D, DOM, Image, Collision')
   })
   .onHit('AIPaddle', function () {
     aiSpeed -= 0.1;
-    this.dY += getYReflection(player);
+    this.dY += getYReflection(ai);
     Crafty('AISpeed').each(function () {
         this.text("AI Speed: " + aiSpeed)
       });
@@ -201,7 +201,7 @@ Crafty.e('AISpeed, DOM, 2D, Text')
 
 
 
-
+// Function to calculate the reflection angle of ball after it hits the paddle
 function getYReflection(paddle){
 
   var middleOfBall = ball.y + ball.h/2;
